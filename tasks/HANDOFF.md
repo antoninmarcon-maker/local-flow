@@ -41,6 +41,9 @@ Il ne reste qu'a valider la boucle complete au clavier reel.
    (Reglages Systeme > Clavier > Dictee)
 4. Apres validation : mettre a jour tasks/todo.md, cloturer le run, evoquer la piste v2
    parakeet-mlx (2x plus rapide, meilleur en francais)
+5. Apres validation : publier le post LinkedIn (brouillon pret dans
+   docs/post-linkedin-2026-07.md, routine R4) avec une video de demo de 20-30 s,
+   puis mesurer a J+3/J+7 dans ~/.claude/voice/engagement-log.md
 
 ## Prochain deblocant
 
