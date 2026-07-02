@@ -1,8 +1,8 @@
 """local-flow : dictee vocale systeme entiere, 100 % locale.
 
-Maintenir la touche configuree (Option droite par defaut) : le micro enregistre.
-Relacher : transcription locale (mlx-whisper, GPU Metal) puis collage du texte
-dans l'application active. Aucune donnee ne quitte la machine.
+Maintenir la touche configuree (fn par defaut, comme Wispr Flow) : le micro
+enregistre. Relacher : transcription locale (mlx-whisper, GPU Metal) puis
+collage du texte dans l'application active. Aucune donnee ne quitte la machine.
 """
 
 import argparse
@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
+import Quartz
 import sounddevice as sd
 from pynput import keyboard
 
@@ -31,6 +32,7 @@ MODELS = {
 }
 
 KEYS = {
+    "fn": None,  # geree par FnListener (event tap Quartz), pas par pynput
     "alt_r": keyboard.Key.alt_r,
     "cmd_r": keyboard.Key.cmd_r,
     "ctrl_r": keyboard.Key.ctrl_r,
@@ -38,14 +40,77 @@ KEYS = {
     "f13": keyboard.Key.f13,
 }
 
+FN_KEYCODE = 63  # kVK_Function
+
 FILLERS = re.compile(r"\b(?:euh+|heu+|hum+|um+|uh+)\b[,.]?\s*", re.IGNORECASE)
 
 
 @dataclass
 class Config:
     model: str
-    key: keyboard.Key
+    key_name: str
     language: str | None
+
+    @property
+    def pynput_key(self) -> keyboard.Key | None:
+        return KEYS[self.key_name]
+
+
+class FnListener:
+    """Touche fn via un event tap Quartz : pynput ne la voit pas sur macOS
+    (elle n'emet que des flagsChanged, keycode 63). fn servant aussi aux combos
+    systeme (fn+fleches...), l'appui d'une autre touche pendant l'enregistrement
+    annule la dictee au lieu de coller du texte fantome."""
+
+    def __init__(self, on_press, on_release, on_cancel) -> None:
+        self.on_press = on_press
+        self.on_release = on_release
+        self.on_cancel = on_cancel
+        self._fn_down = False
+        self._tap = None
+
+    def _callback(self, _proxy: object, type_: int, event: object, _refcon: object) -> object:
+        if type_ == Quartz.kCGEventTapDisabledByTimeout:
+            Quartz.CGEventTapEnable(self._tap, True)
+        elif type_ == Quartz.kCGEventFlagsChanged:
+            keycode = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode)
+            if keycode == FN_KEYCODE:
+                down = bool(Quartz.CGEventGetFlags(event) & Quartz.kCGEventFlagMaskSecondaryFn)
+                if down and not self._fn_down:
+                    self._fn_down = True
+                    self.on_press()
+                elif not down and self._fn_down:
+                    self._fn_down = False
+                    self.on_release()
+        elif type_ == Quartz.kCGEventKeyDown and self._fn_down:
+            self._fn_down = False  # la release de fn qui suivra sera ignoree
+            self.on_cancel()
+        return event
+
+    def prepare(self) -> None:
+        """Cree le tap avant le chargement du modele : echec de permission = sortie
+        immediate, sans charger 2 GB pour rien."""
+        self._tap = Quartz.CGEventTapCreate(
+            Quartz.kCGSessionEventTap,
+            Quartz.kCGHeadInsertEventTap,
+            Quartz.kCGEventTapOptionListenOnly,
+            Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged)
+            | Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown),
+            self._callback,
+            None,
+        )
+        if self._tap is None:
+            raise PermissionError(
+                "Impossible d'ecouter le clavier. Ajouter votre terminal dans "
+                "Reglages Systeme > Confidentialite et securite > Surveillance de "
+                "l'entree, relancer le terminal, puis reessayer."
+            )
+
+    def run(self) -> None:
+        source = Quartz.CFMachPortCreateRunLoopSource(None, self._tap, 0)
+        Quartz.CFRunLoopAddSource(Quartz.CFRunLoopGetCurrent(), source, Quartz.kCFRunLoopCommonModes)
+        Quartz.CGEventTapEnable(self._tap, True)
+        Quartz.CFRunLoopRun()
 
 
 class Recorder:
@@ -138,14 +203,15 @@ class App:
         self.kb = keyboard.Controller()
         self.recording = False
 
-    def on_press(self, key: object) -> None:
-        if key == self.cfg.key and not self.recording:
-            self.recording = True
-            play_sound("Tink")
-            self.recorder.start()
+    def start_recording(self) -> None:
+        if self.recording:
+            return
+        self.recording = True
+        play_sound("Tink")
+        self.recorder.start()
 
-    def on_release(self, key: object) -> None:
-        if key != self.cfg.key or not self.recording:
+    def stop_recording(self) -> None:
+        if not self.recording:
             return
         self.recording = False
         audio = self.recorder.stop()
@@ -153,6 +219,21 @@ class App:
         if len(audio) / SAMPLE_RATE < MIN_DURATION_S:
             return
         threading.Thread(target=self._process, args=(audio,), daemon=True).start()
+
+    def cancel_recording(self) -> None:
+        if not self.recording:
+            return
+        self.recording = False
+        self.recorder.stop()
+        play_sound("Bottle")
+
+    def on_press(self, key: object) -> None:
+        if key == self.cfg.pynput_key:
+            self.start_recording()
+
+    def on_release(self, key: object) -> None:
+        if key == self.cfg.pynput_key:
+            self.stop_recording()
 
     def _process(self, audio: np.ndarray) -> None:
         if float(np.sqrt(np.mean(np.square(audio)))) < RMS_SILENCE_THRESHOLD:
@@ -171,14 +252,21 @@ class App:
               f"-> transcrit en {elapsed:.1f}s : {text}")
 
     def run(self) -> None:
+        fn_listener = None
+        if self.cfg.key_name == "fn":
+            fn_listener = FnListener(self.start_recording, self.stop_recording, self.cancel_recording)
+            fn_listener.prepare()
         print("Prechargement du modele (telechargement HuggingFace au premier lancement)...")
         transcribe(np.zeros(SAMPLE_RATE // 2, dtype=np.float32), self.cfg.model, self.cfg.language)
-        key_name = next(name for name, k in KEYS.items() if k == self.cfg.key)
-        print(f"Pret. Maintenir [{key_name}] pour dicter, relacher pour coller. Ctrl+C pour quitter.")
+        print(f"Pret. Maintenir [{self.cfg.key_name}] pour dicter, relacher pour coller. "
+              "Ctrl+C pour quitter.")
         if load_dictionary():
             print(f"Dictionnaire personnel charge : {DICTIONARY_PATH}")
-        with keyboard.Listener(on_press=self.on_press, on_release=self.on_release) as listener:
-            listener.join()
+        if fn_listener is not None:
+            fn_listener.run()
+        else:
+            with keyboard.Listener(on_press=self.on_press, on_release=self.on_release) as listener:
+                listener.join()
 
 
 def main() -> None:
@@ -188,16 +276,18 @@ def main() -> None:
     )
     parser.add_argument("--model", default="turbo",
                         help="turbo (defaut), small, base, ou un repo HuggingFace mlx complet")
-    parser.add_argument("--key", default="alt_r", choices=sorted(KEYS),
-                        help="touche push-to-talk (defaut : alt_r, Option droite)")
+    parser.add_argument("--key", default="fn", choices=sorted(KEYS),
+                        help="touche push-to-talk (defaut : fn, comme Wispr Flow)")
     parser.add_argument("--language", default=None,
                         help="forcer la langue (fr, en...) ; defaut : auto-detection")
     args = parser.parse_args()
-    cfg = Config(model=args.model, key=KEYS[args.key], language=args.language)
+    cfg = Config(model=args.model, key_name=args.key, language=args.language)
     try:
         App(cfg).run()
     except KeyboardInterrupt:
         print("\nArret.")
+    except PermissionError as exc:
+        raise SystemExit(f"Erreur : {exc}")
 
 
 if __name__ == "__main__":
