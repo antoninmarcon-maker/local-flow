@@ -29,9 +29,15 @@ Boucle cible : maintenir une touche -> parler -> relacher -> le texte apparait d
 - [x] Lanceurs : LocalFlow.command (rapide, permissions du Terminal) +
       scripts/install-launchagent.sh (LaunchAgent login, installe et verifie : daemon
       running, log OK, ~2,3 GB residents modele charge)
-- [ ] Test manuel par Antonin : accorder les 2 permissions au binaire Python
-      (chemin affiche par le script) puis kickstart, et dicter en vrai
-      (seul maillon non verifiable sans les permissions macOS)
+- [x] Choix d'usage (Antonin, 2026-07-03) : lancement A LA DEMANDE via LocalFlow.command,
+      RAM souvent juste -> LaunchAgent desinstalle (le script reste dispo dans le repo)
+- [x] Touche fn par defaut (demande Antonin) : event tap Quartz (flagsChanged keycode 63),
+      annulation si autre touche pressee pendant l'enregistrement (combos fn+fleches),
+      fail-fast permission avant chargement du modele ; machine a etats testee par
+      CGEvents synthetiques, boot reel verifie
+- [ ] Test manuel par Antonin : accorder Surveillance de l'entree + Accessibilite au
+      Terminal, lancer LocalFlow.command, maintenir fn et dicter
+      (seul maillon non verifiable a sa place)
 
 ## Skips deliberes (YAGNI, a ajouter si besoin)
 - Barre visuelle a l'ecran (Wispr) -> son systeme suffit en v1
