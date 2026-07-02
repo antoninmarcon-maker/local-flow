@@ -39,6 +39,33 @@ Options :
 Premier lancement : telechargement du modele depuis HuggingFace (environ 1,6 GB pour turbo).
 Ensuite tout fonctionne hors ligne, y compris sans reseau.
 
+### Lancement rapide
+
+Double-cliquer `LocalFlow.command` (ou Spotlight : taper "LocalFlow", ou l'epingler au Dock).
+S'ouvre dans une fenetre Terminal et reutilise les permissions deja accordees au Terminal.
+
+### Demarrage automatique au login
+
+```bash
+./scripts/install-launchagent.sh              # installe + demarre
+./scripts/install-launchagent.sh --uninstall  # desinstalle
+```
+
+Installe un LaunchAgent launchd : local-flow tourne en arriere-plan, sans fenetre,
+des le login. Logs dans `~/Library/Logs/localflow.log`.
+
+Attention : lance hors Terminal, le process a besoin de ses propres permissions.
+Ajouter le binaire Python affiche par le script (Surveillance de l'entree +
+Accessibilite), puis redemarrer l'agent :
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.antonin.localflow
+```
+
+Empreinte memoire : environ 2,3 GB residents, le modele turbo reste charge pour une
+latence de dictee d'environ 1 s. Si la RAM est juste : `--model small` (moins precis)
+ou preferer `LocalFlow.command` a la demande plutot que l'agent permanent.
+
 ## Permissions macOS (une seule fois)
 
 Reglages Systeme > Confidentialite et securite :
