@@ -26,7 +26,11 @@ Boucle cible : maintenir une touche -> parler -> relacher -> le texte apparait d
       small 0,4-0,9 s mais erreur ("Tesla" pour "test") -> fallback seulement
 - [x] README : setup, permissions macOS (micro + input monitoring + accessibilite), usage
 - [x] Commits atomiques (chore/feat/test/docs)
-- [ ] Test manuel par Antonin : accorder les permissions au terminal puis dicter en vrai
+- [x] Lanceurs : LocalFlow.command (rapide, permissions du Terminal) +
+      scripts/install-launchagent.sh (LaunchAgent login, installe et verifie : daemon
+      running, log OK, ~2,3 GB residents modele charge)
+- [ ] Test manuel par Antonin : accorder les 2 permissions au binaire Python
+      (chemin affiche par le script) puis kickstart, et dicter en vrai
       (seul maillon non verifiable sans les permissions macOS)
 
 ## Skips deliberes (YAGNI, a ajouter si besoin)
