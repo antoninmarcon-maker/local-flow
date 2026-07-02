@@ -56,10 +56,23 @@ Pour un usage confortable de fn en push-to-talk :
 
 ### Lancement rapide (recommande sur 8 GB de RAM)
 
-Double-cliquer `LocalFlow.command` (ou Spotlight : taper "LocalFlow", ou l'epingler au Dock).
-S'ouvre dans une fenetre Terminal et reutilise les permissions deja accordees au Terminal.
-Quitter (et liberer la memoire) : Ctrl+C ou fermer la fenetre. Le modele restant charge
-tant que l'app tourne (~2,3 GB), ce mode a la demande est le bon choix quand la RAM est juste.
+Double-cliquer `LocalFlow.command`. S'ouvre dans une fenetre Terminal et reutilise les
+permissions deja accordees au Terminal. Quitter (et liberer la memoire) : Ctrl+C ou fermer
+la fenetre. Le modele reste charge tant que l'app tourne (~2,3 GB), ce mode a la demande
+est le bon choix quand la RAM est juste.
+
+Spotlight ne met pas en avant les fichiers `.command` : pour lancer depuis Spotlight ou le
+Dock, creer une vraie app lanceur (une fois) :
+
+```bash
+osacompile -o ~/Applications/LocalFlow.app -e 'tell application "Terminal"
+	activate
+	do script "/Users/antoninmarcon/Documents/Projects/local-flow/LocalFlow.command"
+end tell'
+```
+
+Ensuite Spotlight > "LocalFlow" ouvre le Terminal et lance la dictee. Au premier lancement,
+macOS demande a LocalFlow.app le droit de controler le Terminal (Automation) : accepter.
 
 ### Demarrage automatique au login
 
