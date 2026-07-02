@@ -18,13 +18,16 @@ Boucle cible : maintenir une touche -> parler -> relacher -> le texte apparait d
 6. Feedback : son systeme au debut/fin d'enregistrement.
 
 ## Plan
-- [x] Recherche architecture Wispr Flow (agent web)
+- [x] Recherche architecture Wispr Flow (agent web) -> docs/wispr-flow-architecture.md
 - [x] Scaffold projet + git init + plan
-- [ ] Implementation pipeline (app.py, __main__.py)
-- [ ] Self-check runnable : `say` genere un wav -> transcription -> assert contenu
-- [ ] Bench modele sur la machine (RAM + latence) -> fixer le defaut
-- [ ] README : setup, permissions macOS (micro + accessibilite), usage
-- [ ] Commits atomiques (chore/feat/test/docs)
+- [x] Implementation pipeline (app.py, __main__.py)
+- [x] Self-check runnable : `say` genere l'audio -> transcription -> assert contenu (FR + EN OK)
+- [x] Bench modele sur la machine -> turbo par defaut : 1,1 s a chaud, transcription FR parfaite ;
+      small 0,4-0,9 s mais erreur ("Tesla" pour "test") -> fallback seulement
+- [x] README : setup, permissions macOS (micro + input monitoring + accessibilite), usage
+- [x] Commits atomiques (chore/feat/test/docs)
+- [ ] Test manuel par Antonin : accorder les permissions au terminal puis dicter en vrai
+      (seul maillon non verifiable sans les permissions macOS)
 
 ## Skips deliberes (YAGNI, a ajouter si besoin)
 - Barre visuelle a l'ecran (Wispr) -> son systeme suffit en v1
