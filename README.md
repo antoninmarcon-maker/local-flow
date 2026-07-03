@@ -10,7 +10,11 @@ Aucune donnee ne quitte la machine.
    enregistre (son "Tink").
 2. Relacher (son "Pop") : transcription locale par Whisper via mlx-whisper (GPU Metal),
    nettoyage leger (euh, um...), collage dans l'app active via le presse-papiers.
+   Chaque etape s'affiche dans le terminal ("transcription en cours...", texte transcrit).
 3. Le presse-papiers precedent est restaure automatiquement (texte uniquement).
+   Si l'app active a change pendant la transcription (elle peut prendre plusieurs
+   secondes quand la memoire est sous pression), rien n'est colle a l'aveugle :
+   le texte reste dans le presse-papiers, un message l'indique, coller avec Cmd+V.
 4. Annuler une dictee en cours : presser n'importe quelle autre touche (son "Bottle"),
    ou parler moins de 0,3 s.
 
@@ -116,11 +120,25 @@ reconnaissance. Equivalent local du dictionnaire Wispr Flow.
 ## Verification
 
 ```bash
-uv run python tests/test_pipeline.py [modele]
+uv run python tests/test_pipeline.py [modele]   # parole synthetique -> transcription (ffmpeg requis)
+uv run python tests/test_fn_listener.py          # machine a etats fn (CGEvents synthetiques)
+uv run python tests/test_process.py              # chemins silence / vide / garde de focus
 ```
 
-Genere de la parole avec la voix systeme (`say`), la transcrit et verifie le texte.
-Le test a besoin de ffmpeg (`brew install ffmpeg`) ; l'app en usage normal, non.
+Le premier genere de la parole avec la voix systeme (`say`), la transcrit et verifie le
+texte ; il a besoin de ffmpeg (`brew install ffmpeg`). L'app en usage normal, non.
+
+## Depannage : "le texte ne se colle pas"
+
+Le terminal dit toujours pourquoi. Apres avoir relache la touche, lire la sortie :
+
+| Message | Cause | Remede |
+|---|---|---|
+| rien du tout (pas de "transcription en cours...") | la touche n'est pas detectee | permission Surveillance de l'entree du terminal, relancer |
+| `silence detecte (RMS ...)` | micro trop faible ou muet | monter le volume d'entree (Reglages Systeme > Son > Entree) ; l'app previent au demarrage s'il est sous 40/100 |
+| `transcrit en Xs : ...` sans collage | Accessibilite manquante pour le terminal | l'ajouter dans Confidentialite et securite > Accessibilite, relancer |
+| `app active changee pendant la transcription` | le focus a bouge avant la fin de la transcription | le texte est dans le presse-papiers, coller avec Cmd+V |
+| transcription tres lente (10-20 s) | pression memoire (8 GB, navigateur charge...) | fermer des apps ou `--model small` |
 
 ## Limites connues
 
