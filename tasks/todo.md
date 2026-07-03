@@ -35,9 +35,16 @@ Boucle cible : maintenir une touche -> parler -> relacher -> le texte apparait d
       annulation si autre touche pressee pendant l'enregistrement (combos fn+fleches),
       fail-fast permission avant chargement du modele ; machine a etats testee par
       CGEvents synthetiques, boot reel verifie
-- [ ] Test manuel par Antonin : accorder Surveillance de l'entree + Accessibilite au
-      Terminal, lancer LocalFlow.command, maintenir fn et dicter
-      (seul maillon non verifiable a sa place)
+- [x] Debug "le texte ne se colle pas" (2026-07-03) : permissions TCC toutes OK
+      (verifie par sondes dans Terminal), collage CGEventPost sain meme apres mlx
+      (event tap observateur 10/10). Causes reelles : transcription 1,3-14,5 s selon
+      pression memoire pendant laquelle le focus change, chemins de sortie muets,
+      volume d'entree micro 27/100. Fix : garde de focus + message sur chaque chemin
+      + alerte volume. Self-checks verts + boucle re-verifiee en live (F8 + say).
+- [x] Repo GitHub public cree et pousse (antoninmarcon-maker/local-flow)
+- [ ] Test manuel par Antonin : lancer LocalFlow.command, maintenir fn et dicter ;
+      le terminal dit desormais quoi faire pour chaque issue (README > Depannage).
+      Monter le volume d'entree micro > 40 avant le test.
 
 ## Skips deliberes (YAGNI, a ajouter si besoin)
 - Barre visuelle a l'ecran (Wispr) -> son systeme suffit en v1
