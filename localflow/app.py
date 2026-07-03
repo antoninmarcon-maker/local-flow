@@ -16,6 +16,7 @@ from pathlib import Path
 import numpy as np
 import Quartz
 import sounddevice as sd
+from AppKit import NSWorkspace
 from pynput import keyboard
 
 SAMPLE_RATE = 16_000
@@ -182,6 +183,31 @@ def play_sound(name: str) -> None:
     )
 
 
+def ts() -> str:
+    return time.strftime("%H:%M:%S")
+
+
+def frontmost_app() -> tuple[int, str]:
+    """(pid, nom) de l'app active. La transcription pouvant prendre plusieurs
+    secondes sous pression memoire, l'app active au collage n'est pas forcement
+    celle de la dictee : on capture la cible au relachement pour comparer."""
+    app = NSWorkspace.sharedWorkspace().frontmostApplication()
+    if app is None:
+        return (0, "?")
+    return (int(app.processIdentifier()), str(app.localizedName()))
+
+
+def input_volume() -> int | None:
+    try:
+        out = subprocess.run(
+            ["osascript", "-e", "input volume of (get volume settings)"],
+            capture_output=True, text=True, timeout=5,
+        ).stdout.strip()
+        return int(out)
+    except (ValueError, OSError, subprocess.TimeoutExpired):
+        return None
+
+
 def paste(text: str, kb: keyboard.Controller) -> None:
     """Colle via presse-papiers + Cmd+V simule, puis restaure le presse-papiers.
     ponytail: restauration texte seulement ; une image copiee juste avant est perdue."""
@@ -216,9 +242,13 @@ class App:
         self.recording = False
         audio = self.recorder.stop()
         play_sound("Pop")
-        if len(audio) / SAMPLE_RATE < MIN_DURATION_S:
+        duration = len(audio) / SAMPLE_RATE
+        if duration < MIN_DURATION_S:
+            print(f"[{ts()}] enregistrement trop court ({duration:.1f}s), ignore")
             return
-        threading.Thread(target=self._process, args=(audio,), daemon=True).start()
+        target = frontmost_app()
+        print(f"[{ts()}] {duration:.1f}s de parole, transcription en cours...")
+        threading.Thread(target=self._process, args=(audio, target), daemon=True).start()
 
     def cancel_recording(self) -> None:
         if not self.recording:
@@ -226,6 +256,7 @@ class App:
         self.recording = False
         self.recorder.stop()
         play_sound("Bottle")
+        print(f"[{ts()}] dictee annulee (autre touche pendant l'enregistrement)")
 
     def on_press(self, key: object) -> None:
         if key == self.cfg.pynput_key:
@@ -235,8 +266,12 @@ class App:
         if key == self.cfg.pynput_key:
             self.stop_recording()
 
-    def _process(self, audio: np.ndarray) -> None:
-        if float(np.sqrt(np.mean(np.square(audio)))) < RMS_SILENCE_THRESHOLD:
+    def _process(self, audio: np.ndarray, target: tuple[int, str]) -> None:
+        rms = float(np.sqrt(np.mean(np.square(audio))))
+        if rms < RMS_SILENCE_THRESHOLD:
+            print(f"[{ts()}] silence detecte (RMS {rms:.4f} < {RMS_SILENCE_THRESHOLD}), "
+                  "ignore. Si vous parliez : monter le volume d'entree micro "
+                  "(Reglages Systeme > Son > Entree).")
             return
         t0 = time.monotonic()
         try:
@@ -244,12 +279,20 @@ class App:
         except Exception as exc:
             print(f"[erreur] transcription : {exc}")
             return
+        elapsed = time.monotonic() - t0
         if not text:
+            print(f"[{ts()}] transcription vide, rien a coller")
+            return
+        print(f"[{ts()}] transcrit en {elapsed:.1f}s : {text}")
+        current = frontmost_app()
+        if current[0] != target[0]:
+            clipboard_set(text)
+            print(f"[{ts()}] app active changee pendant la transcription "
+                  f"({target[1]} -> {current[1]}) : texte laisse dans le "
+                  "presse-papiers, coller avec Cmd+V.")
             return
         paste(text, self.kb)
-        elapsed = time.monotonic() - t0
-        print(f"[{time.strftime('%H:%M:%S')}] {len(audio) / SAMPLE_RATE:.1f}s de parole "
-              f"-> transcrit en {elapsed:.1f}s : {text}")
+        print(f"[{ts()}] colle dans {target[1]}")
 
     def run(self) -> None:
         fn_listener = None
@@ -262,6 +305,10 @@ class App:
               "Ctrl+C pour quitter.")
         if load_dictionary():
             print(f"Dictionnaire personnel charge : {DICTIONARY_PATH}")
+        volume = input_volume()
+        if volume is not None and volume < 40:
+            print(f"[attention] volume d'entree micro bas ({volume}/100) : la garde "
+                  "anti-silence peut avaler la dictee. Reglages Systeme > Son > Entree.")
         if fn_listener is not None:
             fn_listener.run()
         else:
