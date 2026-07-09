@@ -42,9 +42,8 @@ Boucle cible : maintenir une touche -> parler -> relacher -> le texte apparait d
       volume d'entree micro 27/100. Fix : garde de focus + message sur chaque chemin
       + alerte volume. Self-checks verts + boucle re-verifiee en live (F8 + say).
 - [x] Repo GitHub public cree et pousse (antoninmarcon-maker/local-flow)
-- [ ] Test manuel par Antonin : lancer LocalFlow.command, maintenir fn et dicter ;
-      le terminal dit desormais quoi faire pour chaque issue (README > Depannage).
-      Monter le volume d'entree micro > 40 avant le test.
+- [x] Test manuel par Antonin (2026-07-03) : VALIDE, la boucle fn -> parole ->
+      collage fonctionne au clavier reel. Projet operationnel.
 
 ## Skips deliberes (YAGNI, a ajouter si besoin)
 - Barre visuelle a l'ecran (Wispr) -> son systeme suffit en v1
