@@ -122,7 +122,7 @@ reconnaissance. Equivalent local du dictionnaire Wispr Flow.
 ```bash
 uv run python tests/test_pipeline.py [modele]   # parole synthetique -> transcription (ffmpeg requis)
 uv run python tests/test_fn_listener.py          # machine a etats fn (CGEvents synthetiques)
-uv run python tests/test_process.py              # chemins silence / vide / garde de focus
+uv run python tests/test_process.py              # chemins silence / bruit plat / gain bas / vide / garde de focus
 ```
 
 Le premier genere de la parole avec la voix systeme (`say`), la transcrit et verifie le
@@ -135,7 +135,8 @@ Le terminal dit toujours pourquoi. Apres avoir relache la touche, lire la sortie
 | Message | Cause | Remede |
 |---|---|---|
 | rien du tout (pas de "transcription en cours...") | la touche n'est pas detectee | permission Surveillance de l'entree du terminal, relancer |
-| `silence detecte (RMS ...)` | micro trop faible ou muet | monter le volume d'entree (Reglages Systeme > Son > Entree) ; l'app previent au demarrage s'il est sous 40/100 |
+| `micro muet (crete RMS ...)` | le micro ne capte rien du tout | verifier l'entree selectionnee et son volume (Reglages Systeme > Son > Entree) |
+| `pas de parole detectee (signal plat ...)` | du bruit constant mais pas de voix | parler plus pres du micro ; la detection est independante du volume d'entree (dynamique de la parole, pas niveau absolu) |
 | `transcrit en Xs : ...` sans collage | Accessibilite manquante pour le terminal | l'ajouter dans Confidentialite et securite > Accessibilite, relancer |
 | `app active changee pendant la transcription` | le focus a bouge avant la fin de la transcription | le texte est dans le presse-papiers, coller avec Cmd+V |
 | transcription tres lente (10-20 s) | pression memoire (8 GB, navigateur charge...) | fermer des apps ou `--model small` |
