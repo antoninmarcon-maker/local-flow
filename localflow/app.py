@@ -21,9 +21,13 @@ from pynput import keyboard
 
 SAMPLE_RATE = 16_000
 MIN_DURATION_S = 0.3
-# ponytail: garde RMS simple contre les hallucinations Whisper sur le silence
-# ("Sous-titres par Amara.org") ; passer a un vrai VAD (Silero) si insuffisant.
-RMS_SILENCE_THRESHOLD = 0.005
+# ponytail: garde anti-silence par dynamique de trames, invariante au gain micro.
+# L'ancien seuil RMS absolu (0.005) avalait la vraie parole a volume d'entree bas
+# (38/100 -> RMS 0.0002-0.0019). La parole module (syllabes, pauses) : crete/plancher
+# mesure >= 7 quel que soit le gain ; bruit plat <= 1.8. Vrai VAD (Silero) si insuffisant.
+FRAME_S = 0.03
+SILENCE_PEAK_RMS = 1e-5      # crete sous ce niveau : micro muet / zeros numeriques
+SPEECH_DYNAMICS_RATIO = 3.0  # crete p95 >= 3 x plancher p10 => parole
 DICTIONARY_PATH = Path.home() / ".config" / "localflow" / "dictionary.txt"
 
 MODELS = {
@@ -162,6 +166,16 @@ def transcribe(audio: "np.ndarray | str", model: str, language: str | None) -> s
     return str(result["text"]).strip()
 
 
+def speech_levels(audio: np.ndarray) -> tuple[float, float]:
+    """(plancher p10, crete p95) des RMS par trame de 30 ms. La parole se
+    reconnait a sa dynamique (crete >> plancher), pas a son niveau absolu
+    qui depend du gain d'entree micro."""
+    n = int(SAMPLE_RATE * FRAME_S)
+    usable = len(audio) - len(audio) % n
+    levels = np.sqrt(np.mean(np.square(audio[:usable].reshape(-1, n)), axis=1))
+    return float(np.percentile(levels, 10)), float(np.percentile(levels, 95))
+
+
 def clean(text: str) -> str:
     text = FILLERS.sub("", text)
     text = re.sub(r"\s+", " ", text).strip()
@@ -267,12 +281,17 @@ class App:
             self.stop_recording()
 
     def _process(self, audio: np.ndarray, target: tuple[int, str]) -> None:
-        rms = float(np.sqrt(np.mean(np.square(audio))))
-        if rms < RMS_SILENCE_THRESHOLD:
-            print(f"[{ts()}] silence detecte (RMS {rms:.4f} < {RMS_SILENCE_THRESHOLD}), "
-                  "ignore. Si vous parliez : monter le volume d'entree micro "
-                  "(Reglages Systeme > Son > Entree).")
+        floor, peak = speech_levels(audio)
+        if peak < SILENCE_PEAK_RMS:
+            print(f"[{ts()}] micro muet (crete RMS {peak:.6f}), ignore. Verifier "
+                  "l'entree micro (Reglages Systeme > Son > Entree).")
             return
+        if peak < SPEECH_DYNAMICS_RATIO * floor:
+            print(f"[{ts()}] pas de parole detectee (signal plat : crete {peak:.4f} "
+                  f"< {SPEECH_DYNAMICS_RATIO} x plancher {floor:.4f}), ignore.")
+            return
+        # niveau normalise : Whisper transcrit mal un signal 50-100x trop bas
+        audio = audio * (0.9 / float(np.abs(audio).max()))
         t0 = time.monotonic()
         try:
             text = clean(transcribe(audio, self.cfg.model, self.cfg.language))
@@ -307,8 +326,9 @@ class App:
             print(f"Dictionnaire personnel charge : {DICTIONARY_PATH}")
         volume = input_volume()
         if volume is not None and volume < 40:
-            print(f"[attention] volume d'entree micro bas ({volume}/100) : la garde "
-                  "anti-silence peut avaler la dictee. Reglages Systeme > Son > Entree.")
+            print(f"[attention] volume d'entree micro bas ({volume}/100) : le signal "
+                  "est normalise automatiquement, mais monter l'entree ameliore la "
+                  "precision (Reglages Systeme > Son > Entree).")
         if fn_listener is not None:
             fn_listener.run()
         else:
