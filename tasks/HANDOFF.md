@@ -36,18 +36,15 @@ y compris a volume d'entree micro bas (fix garde anti-silence valide et merge).
 1. (reporte du 03/07, a verifier) Post LinkedIn local-flow : etait planifie mardi
    07/07 via portfolio-weekly-linkedin. Verifier s'il est parti ; mesure J+7
    (~14/07) dans ~/.claude/voice/engagement-log.md
-2. (optionnel) Nettoyage : supprimer le worktree
-   .claude/worktrees/localflow-mic-sensitivity-250316 et la branche
-   claude/localflow-mic-sensitivity-250316 (mergee dans main)
-3. (optionnel) Piste v2 : parakeet-mlx (2x plus rapide, meilleur en francais)
-4. (optionnel) Ameliorations README listees dans Pistes d'evolution
+2. (optionnel) Piste v2 : parakeet-mlx (2x plus rapide, meilleur en francais)
+3. (optionnel) Ameliorations README listees dans Pistes d'evolution
 
 ## Prochain deblocant
 
 Rien de bloquant : fix garde anti-silence VALIDE au clavier reel par Antonin
-(2026-07-12, volume micro laisse a 38/100) et merge dans main. A la reprise
-("reprends"), traiter le Restant 1 (verif post LinkedIn) ou le nettoyage du
-worktree si Antonin le demande.
+(2026-07-12, volume micro laisse a 38/100), merge dans main et pousse. Worktree
+et branche de chantier supprimes le 2026-07-12. A la reprise ("reprends"),
+traiter le Restant 1 (verif post LinkedIn).
 
 ## Pieges connus
 
