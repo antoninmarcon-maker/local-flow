@@ -1,7 +1,7 @@
 ---
 statut: termine
 auto-resume: false
-updated: 2026-07-03T13:00:00+02:00
+updated: 2026-07-12T00:05:00+02:00
 ---
 
 # HANDOFF - local-flow
@@ -9,47 +9,58 @@ updated: 2026-07-03T13:00:00+02:00
 ## Objectif
 
 Dictee vocale 100 % locale (clone Wispr Flow) operationnelle sur le M2 8 GB :
-maintenir fn, parler, relacher, le texte se colle dans l'app active. ATTEINT.
+maintenir fn, parler, relacher, le texte se colle dans l'app active. ATTEINT,
+y compris a volume d'entree micro bas (fix garde anti-silence valide et merge).
 
 ## Fait (verifie)
 
 - App complete sur main : pipeline mlx-whisper turbo, fn via event tap Quartz,
-  annulation combo, garde RMS, dictionnaire personnel, collage Cmd+V + restauration
-- Debug du 2026-07-03 clos par sondes instrumentees : ce n'etait ni TCC ni mlx.
-  Causes reelles : transcription 1,3-14,5 s selon pression memoire pendant laquelle
-  le focus change d'app, chemins de sortie muets (RMS, texte vide), volume d'entree
-  micro 27/100. Details : tasks/todo.md et tasks/lessons.md
-- Correctifs livres : garde de focus au collage, message explicite sur chaque
-  chemin, alerte volume d'entree < 40 au demarrage. Self-checks verts
-  (test_process.py, test_fn_listener.py), boucle re-verifiee live (F8 + say)
-- TEST MANUEL FN VALIDE PAR ANTONIN (2026-07-03) : la boucle complete
-  fn -> parole -> collage fonctionne au clavier reel. Chantier clos.
+  annulation combo, dictionnaire personnel, collage Cmd+V + restauration
+- Debug du 2026-07-03 clos (garde de focus, chemins de sortie parlants, alerte
+  volume). Test manuel fn VALIDE par Antonin le 03/07. Details : tasks/todo.md
 - Repo GitHub PUBLIC : https://github.com/antoninmarcon-maker/local-flow
-  (note : tasks/ et docs/post-linkedin-2026-07.md y sont publics)
+- FIX GARDE ANTI-SILENCE (2026-07-11, branche claude/localflow-mic-sensitivity-250316,
+  3 commits NON POUSSES : f93938a fix, b744084 readme, f773de7 tasks) :
+  le seuil RMS absolu 0.005 rejetait la vraie parole a 38/100 de volume d'entree
+  (RMS clip 0.0002-0.0019, 3 dictees avalees le 11/07 a 22h20). Remplace par une
+  detection par dynamique de trames (crete p95 >= 3 x plancher p10 des RMS de
+  30 ms, invariante au gain : parole reelle >= 7, bruit plat <= 1.8) +
+  normalisation crete 0.9 avant Whisper. VERIFIE : test de regression qui echoue
+  sur l'ancien code et passe sur le nouveau, E2E vrai modele turbo aux 3 niveaux
+  RMS du bug (transcription identique aux 3 gains), suite complete verte
+  (test_process 6 chemins, test_fn_listener, test_pipeline EN+FR)
+- gstack mis a jour 1.57.9.0 -> 1.60.1.0 (2026-07-11)
 
 ## Restant (ordonne)
 
-1. Post LinkedIn : publication MARDI 2026-07-07 via la routine
-   portfolio-weekly-linkedin (8h05). Le pendingDraft pointe deja sur
-   drafts/2026-07-07-local-flow.md. Mode validation : la routine ne publie jamais
-   seule, Antonin colle le texte a la main. Idealement enregistrer une video demo
-   20-30 s avant mardi. Mesure J+3/J+7 dans ~/.claude/voice/engagement-log.md
-2. (optionnel) Piste v2 : parakeet-mlx (2x plus rapide, meilleur en francais)
-3. (optionnel) Ameliorations README listees dans Pistes d'evolution
+1. (reporte du 03/07, a verifier) Post LinkedIn local-flow : etait planifie mardi
+   07/07 via portfolio-weekly-linkedin. Verifier s'il est parti ; mesure J+7
+   (~14/07) dans ~/.claude/voice/engagement-log.md
+2. (optionnel) Nettoyage : supprimer le worktree
+   .claude/worktrees/localflow-mic-sensitivity-250316 et la branche
+   claude/localflow-mic-sensitivity-250316 (mergee dans main)
+3. (optionnel) Piste v2 : parakeet-mlx (2x plus rapide, meilleur en francais)
+4. (optionnel) Ameliorations README listees dans Pistes d'evolution
 
 ## Prochain deblocant
 
-Rien de bloquant : le projet est fonctionnel et publie. A la reprise ("reprends"
-dans ce dossier), traiter le Restant 1 (video demo avant le post de mardi 07/07)
-ou la piste parakeet-mlx si Antonin le demande.
+Rien de bloquant : fix garde anti-silence VALIDE au clavier reel par Antonin
+(2026-07-12, volume micro laisse a 38/100) et merge dans main. A la reprise
+("reprends"), traiter le Restant 1 (verif post LinkedIn) ou le nettoyage du
+worktree si Antonin le demande.
 
 ## Pieges connus
 
 - Premiere inference d'un process : chargement modele ~5-10 s, attendre "Pret.".
-  Sous pression memoire une transcription peut prendre 10-20 s ; le terminal
-  affiche "transcription en cours..." puis le texte.
+  Sous pression memoire une transcription peut prendre 10-20 s ("transcription
+  en cours..." s'affiche).
 - Permissions TCC attachees au host : Terminal pour LocalFlow.command.
 - Restauration presse-papiers : texte seulement.
 - Tester du collage synthetique pendant que quelqu'un utilise le Mac : les
-  evenements partent vers SON app frontale. Verifier
-  NSWorkspace.frontmostApplication au moment du post (lecons du 03/07).
+  evenements partent vers SON app frontale (lecons du 03/07).
+- Seuils audio : ne JAMAIS revenir a un seuil de niveau absolu, il n'est pas
+  invariant au gain d'entree micro (lecon du 11/07). La doublure parole() des
+  tests doit garder une dynamique de parole (un sinus plat est rejete).
+- LocalFlow.command lance depuis le repo PRINCIPAL utilise le code de main,
+  pas celui de la branche worktree : pour tester le fix avant merge, lancer
+  depuis le worktree ou merger d'abord.
