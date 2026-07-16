@@ -51,7 +51,8 @@ Boucle cible : maintenir une touche -> parler -> relacher -> le texte apparait d
       reelle mesuree >= 7, bruit plat <= 1.8) + normalisation du signal avant
       Whisper. Verifie E2E au vrai modele aux 3 niveaux RMS du bug : transcription
       identique aux 3 gains. Test de regression : echoue sur l'ancien code,
-      passe sur le nouveau. A re-tester au clavier reel par Antonin.
+      passe sur le nouveau. TEST CLAVIER REEL VALIDE par Antonin (2026-07-12),
+      volume micro laisse a 38/100 : la dictee colle. Merge dans main.
 
 ## Skips deliberes (YAGNI, a ajouter si besoin)
 - Barre visuelle a l'ecran (Wispr) -> son systeme suffit en v1

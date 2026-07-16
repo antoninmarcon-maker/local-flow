@@ -1,7 +1,7 @@
 ---
-statut: en-cours
+statut: termine
 auto-resume: false
-updated: 2026-07-11T23:20:00+02:00
+updated: 2026-07-12T00:05:00+02:00
 ---
 
 # HANDOFF - local-flow
@@ -9,9 +9,8 @@ updated: 2026-07-11T23:20:00+02:00
 ## Objectif
 
 Dictee vocale 100 % locale (clone Wispr Flow) operationnelle sur le M2 8 GB :
-maintenir fn, parler, relacher, le texte se colle dans l'app active.
-Chantier courant : fix de la garde anti-silence qui avalait la dictee a volume
-d'entree micro bas (38/100). Fix commite, en attente du test clavier reel.
+maintenir fn, parler, relacher, le texte se colle dans l'app active. ATTEINT,
+y compris a volume d'entree micro bas (fix garde anti-silence valide et merge).
 
 ## Fait (verifie)
 
@@ -34,34 +33,21 @@ d'entree micro bas (38/100). Fix commite, en attente du test clavier reel.
 
 ## Restant (ordonne)
 
-1. TEST CLAVIER REEL par Antonin : lancer le launcher DU WORKTREE (verifie : son
-   .venv pointe sur le code corrige) et dicter SANS monter le volume micro
-   (rester a 38/100 expres). Attendu : plus de "silence detecte", le texte se colle.
-
-   ```bash
-   /Users/antoninmarcon/Documents/Projects/local-flow/.claude/worktrees/localflow-mic-sensitivity-250316/LocalFlow.command
-   ```
-2. Apres validation : merger la branche dans main et pousser.
-3. (reporte du 03/07, a verifier) Post LinkedIn local-flow : etait planifie mardi
+1. (reporte du 03/07, a verifier) Post LinkedIn local-flow : etait planifie mardi
    07/07 via portfolio-weekly-linkedin. Verifier s'il est parti ; mesure J+7
    (~14/07) dans ~/.claude/voice/engagement-log.md
-4. (optionnel) Piste v2 : parakeet-mlx (2x plus rapide, meilleur en francais)
-5. (optionnel) Ameliorations README listees dans Pistes d'evolution
+2. (optionnel) Nettoyage : supprimer le worktree
+   .claude/worktrees/localflow-mic-sensitivity-250316 et la branche
+   claude/localflow-mic-sensitivity-250316 (mergee dans main)
+3. (optionnel) Piste v2 : parakeet-mlx (2x plus rapide, meilleur en francais)
+4. (optionnel) Ameliorations README listees dans Pistes d'evolution
 
 ## Prochain deblocant
 
-Le Restant 1 (test humain) ne peut etre fait que par Antonin. A la reprise
-("reprends" dans ce dossier), si Antonin dit que le test est OK, executer le
-Restant 2 :
-
-```bash
-cd /Users/antoninmarcon/Documents/Projects/local-flow
-git merge --no-ff claude/localflow-mic-sensitivity-250316
-git push
-```
-
-Puis proposer de supprimer le worktree
-(.claude/worktrees/localflow-mic-sensitivity-250316) et la branche.
+Rien de bloquant : fix garde anti-silence VALIDE au clavier reel par Antonin
+(2026-07-12, volume micro laisse a 38/100) et merge dans main. A la reprise
+("reprends"), traiter le Restant 1 (verif post LinkedIn) ou le nettoyage du
+worktree si Antonin le demande.
 
 ## Pieges connus
 
