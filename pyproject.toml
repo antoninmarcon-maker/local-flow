@@ -9,6 +9,10 @@ dependencies = [
     "pynput>=1.7",
 ]
 
+[project.optional-dependencies]
+# Repli du moteur IA si Apple Intelligence est indisponible : uv sync --extra fallback
+fallback = ["mlx-lm>=0.24"]
+
 [project.scripts]
 localflow = "localflow.app:main"
 
