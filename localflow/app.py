@@ -2,246 +2,89 @@
 
 Maintenir la touche configuree (fn par defaut, comme Wispr Flow) : le micro
 enregistre. Relacher : transcription locale (mlx-whisper, GPU Metal) puis
-collage du texte dans l'application active. Aucune donnee ne quitte la machine.
+collage du texte dans l'application active. Un panneau flottant affiche la
+transcription en direct et propose corriger / traduire / reformuler via
+Apple Intelligence (on-device). Aucune donnee ne quitte la machine.
 """
 
 import argparse
-import re
-import subprocess
+import queue
 import threading
 import time
-from dataclasses import dataclass
-from pathlib import Path
 
 import numpy as np
-import Quartz
-import sounddevice as sd
-from AppKit import NSWorkspace
 from pynput import keyboard
 
-SAMPLE_RATE = 16_000
-MIN_DURATION_S = 0.3
-# ponytail: garde anti-silence par dynamique de trames, invariante au gain micro.
-# L'ancien seuil RMS absolu (0.005) avalait la vraie parole a volume d'entree bas
-# (38/100 -> RMS 0.0002-0.0019). La parole module (syllabes, pauses) : crete/plancher
-# mesure >= 7 quel que soit le gain ; bruit plat <= 1.8. Vrai VAD (Silero) si insuffisant.
-FRAME_S = 0.03
-SILENCE_PEAK_RMS = 1e-5      # crete sous ce niveau : micro muet / zeros numeriques
-SPEECH_DYNAMICS_RATIO = 3.0  # crete p95 >= 3 x plancher p10 => parole
-DICTIONARY_PATH = Path.home() / ".config" / "localflow" / "dictionary.txt"
+from localflow.audio import (
+    MIN_DURATION_S,
+    SAMPLE_RATE,
+    SILENCE_PEAK_RMS,
+    SPEECH_DYNAMICS_RATIO,
+    Recorder,
+    normalize,
+    speech_levels,
+)
+from localflow.clipboard import clipboard_set, paste, press_undo
+from localflow.config import DICTIONARY_PATH, TRANSLATE_LANGS, Config, Settings
+from localflow.context import read_conversation
+from localflow.hotkey import FN_KEYCODE, KEYS, FnListener
+from localflow.macos import frontmost_app, input_volume, play_sound, preload_sounds, ts
+from localflow.stt import PREVIEW_MODEL, detect_language, load_dictionary, preload, transcribe
+from localflow.textproc import clean
 
-MODELS = {
-    "turbo": "mlx-community/whisper-large-v3-turbo",
-    "small": "mlx-community/whisper-small-mlx",
-    "base": "mlx-community/whisper-base-mlx",
+ACTION_LABELS = {
+    "correct": "Correction",
+    "translate": "Traduction",
+    "pro": "Reformulation pro",
+    "friendly": "Reformulation amicale",
 }
-
-KEYS = {
-    "fn": None,  # geree par FnListener (event tap Quartz), pas par pynput
-    "alt_r": keyboard.Key.alt_r,
-    "cmd_r": keyboard.Key.cmd_r,
-    "ctrl_r": keyboard.Key.ctrl_r,
-    "f8": keyboard.Key.f8,
-    "f13": keyboard.Key.f13,
-}
-
-FN_KEYCODE = 63  # kVK_Function
-
-FILLERS = re.compile(r"\b(?:euh+|heu+|hum+|um+|uh+)\b[,.]?\s*", re.IGNORECASE)
-
-
-@dataclass
-class Config:
-    model: str
-    key_name: str
-    language: str | None
-
-    @property
-    def pynput_key(self) -> keyboard.Key | None:
-        return KEYS[self.key_name]
-
-
-class FnListener:
-    """Touche fn via un event tap Quartz : pynput ne la voit pas sur macOS
-    (elle n'emet que des flagsChanged, keycode 63). fn servant aussi aux combos
-    systeme (fn+fleches...), l'appui d'une autre touche pendant l'enregistrement
-    annule la dictee au lieu de coller du texte fantome."""
-
-    def __init__(self, on_press, on_release, on_cancel) -> None:
-        self.on_press = on_press
-        self.on_release = on_release
-        self.on_cancel = on_cancel
-        self._fn_down = False
-        self._tap = None
-
-    def _callback(self, _proxy: object, type_: int, event: object, _refcon: object) -> object:
-        if type_ == Quartz.kCGEventTapDisabledByTimeout:
-            Quartz.CGEventTapEnable(self._tap, True)
-        elif type_ == Quartz.kCGEventFlagsChanged:
-            keycode = Quartz.CGEventGetIntegerValueField(event, Quartz.kCGKeyboardEventKeycode)
-            if keycode == FN_KEYCODE:
-                down = bool(Quartz.CGEventGetFlags(event) & Quartz.kCGEventFlagMaskSecondaryFn)
-                if down and not self._fn_down:
-                    self._fn_down = True
-                    self.on_press()
-                elif not down and self._fn_down:
-                    self._fn_down = False
-                    self.on_release()
-        elif type_ == Quartz.kCGEventKeyDown and self._fn_down:
-            self._fn_down = False  # la release de fn qui suivra sera ignoree
-            self.on_cancel()
-        return event
-
-    def prepare(self) -> None:
-        """Cree le tap avant le chargement du modele : echec de permission = sortie
-        immediate, sans charger 2 GB pour rien."""
-        self._tap = Quartz.CGEventTapCreate(
-            Quartz.kCGSessionEventTap,
-            Quartz.kCGHeadInsertEventTap,
-            Quartz.kCGEventTapOptionListenOnly,
-            Quartz.CGEventMaskBit(Quartz.kCGEventFlagsChanged)
-            | Quartz.CGEventMaskBit(Quartz.kCGEventKeyDown),
-            self._callback,
-            None,
-        )
-        if self._tap is None:
-            raise PermissionError(
-                "Impossible d'ecouter le clavier. Ajouter votre terminal dans "
-                "Reglages Systeme > Confidentialite et securite > Surveillance de "
-                "l'entree, relancer le terminal, puis reessayer."
-            )
-
-    def run(self) -> None:
-        source = Quartz.CFMachPortCreateRunLoopSource(None, self._tap, 0)
-        Quartz.CFRunLoopAddSource(Quartz.CFRunLoopGetCurrent(), source, Quartz.kCFRunLoopCommonModes)
-        Quartz.CGEventTapEnable(self._tap, True)
-        Quartz.CFRunLoopRun()
-
-
-class Recorder:
-    """Capture micro en continu tant que la touche est maintenue."""
-
-    def __init__(self) -> None:
-        self._blocks: list[np.ndarray] = []
-        self._stream: sd.InputStream | None = None
-
-    def start(self) -> None:
-        self._blocks = []
-        self._stream = sd.InputStream(
-            samplerate=SAMPLE_RATE, channels=1, dtype="float32",
-            callback=lambda indata, *_: self._blocks.append(indata.copy()),
-        )
-        self._stream.start()
-
-    def stop(self) -> np.ndarray:
-        if self._stream is not None:
-            self._stream.stop()
-            self._stream.close()
-            self._stream = None
-        if not self._blocks:
-            return np.zeros(0, dtype=np.float32)
-        return np.concatenate(self._blocks)[:, 0]
-
-
-def load_dictionary() -> str | None:
-    """Dictionnaire personnel : un mot/nom propre par ligne, injecte en
-    initial_prompt pour biaiser Whisper (equivalent local du dictionnaire Wispr)."""
-    try:
-        lines = DICTIONARY_PATH.read_text(encoding="utf-8").splitlines()
-    except FileNotFoundError:
-        return None
-    words = [w.strip() for w in lines if w.strip() and not w.startswith("#")]
-    return ("Vocabulaire : " + ", ".join(words) + ".") if words else None
-
-
-def transcribe(audio: "np.ndarray | str", model: str, language: str | None) -> str:
-    import mlx_whisper  # import differe : coute ~2 s au premier appel
-
-    result = mlx_whisper.transcribe(
-        audio,
-        path_or_hf_repo=MODELS.get(model, model),
-        language=language,
-        initial_prompt=load_dictionary(),
-    )
-    return str(result["text"]).strip()
-
-
-def speech_levels(audio: np.ndarray) -> tuple[float, float]:
-    """(plancher p10, crete p95) des RMS par trame de 30 ms. La parole se
-    reconnait a sa dynamique (crete >> plancher), pas a son niveau absolu
-    qui depend du gain d'entree micro."""
-    n = int(SAMPLE_RATE * FRAME_S)
-    usable = len(audio) - len(audio) % n
-    levels = np.sqrt(np.mean(np.square(audio[:usable].reshape(-1, n)), axis=1))
-    return float(np.percentile(levels, 10)), float(np.percentile(levels, 95))
-
-
-def clean(text: str) -> str:
-    text = FILLERS.sub("", text)
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
-
-
-def clipboard_get() -> str:
-    return subprocess.run(["pbpaste"], capture_output=True, text=True).stdout
-
-
-def clipboard_set(text: str) -> None:
-    subprocess.run(["pbcopy"], input=text, text=True, check=True)
-
-
-def play_sound(name: str) -> None:
-    subprocess.Popen(
-        ["afplay", f"/System/Library/Sounds/{name}.aiff"],
-        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-    )
-
-
-def ts() -> str:
-    return time.strftime("%H:%M:%S")
-
-
-def frontmost_app() -> tuple[int, str]:
-    """(pid, nom) de l'app active. La transcription pouvant prendre plusieurs
-    secondes sous pression memoire, l'app active au collage n'est pas forcement
-    celle de la dictee : on capture la cible au relachement pour comparer."""
-    app = NSWorkspace.sharedWorkspace().frontmostApplication()
-    if app is None:
-        return (0, "?")
-    return (int(app.processIdentifier()), str(app.localizedName()))
-
-
-def input_volume() -> int | None:
-    try:
-        out = subprocess.run(
-            ["osascript", "-e", "input volume of (get volume settings)"],
-            capture_output=True, text=True, timeout=5,
-        ).stdout.strip()
-        return int(out)
-    except (ValueError, OSError, subprocess.TimeoutExpired):
-        return None
-
-
-def paste(text: str, kb: keyboard.Controller) -> None:
-    """Colle via presse-papiers + Cmd+V simule, puis restaure le presse-papiers.
-    ponytail: restauration texte seulement ; une image copiee juste avant est perdue."""
-    saved = clipboard_get()
-    clipboard_set(text)
-    time.sleep(0.05)
-    with kb.pressed(keyboard.Key.cmd):
-        kb.press("v")
-        kb.release("v")
-    time.sleep(0.3)  # laisse l'app cible lire le presse-papiers avant restauration
-    if saved:
-        clipboard_set(saved)
 
 
 class App:
-    def __init__(self, cfg: Config) -> None:
+    def __init__(self, cfg: Config, settings: Settings | None = None,
+                 ui=None, ai=None, habits=None) -> None:
         self.cfg = cfg
+        self.settings = settings or Settings()
+        self.ui = ui
+        self.ai = ai
+        self.habits = habits
         self.recorder = Recorder()
         self.kb = keyboard.Controller()
         self.recording = False
+        self._pasting = threading.Event()
+        self._jobs: queue.Queue = queue.Queue()
+        self._worker: threading.Thread | None = None
+        self._detected_lang: str | None = None
+        # derniere dictee : {"text": str, "target": (pid, nom), "pasted": bool}
+        self._last: dict | None = None
+
+    # ------------------------------------------------------------------ worker
+    # Un unique thread consomme dictees et actions IA : deux transcriptions
+    # concurrentes se ralentissaient mutuellement (GPU/GIL), l'ordre de collage
+    # n'etait pas garanti, et deux paste() entrelaces corrompaient la
+    # sauvegarde/restauration du presse-papiers.
+
+    def _ensure_worker(self) -> None:
+        if self._worker is None:
+            self._worker = threading.Thread(target=self._drain, daemon=True)
+            self._worker.start()
+
+    def _drain(self) -> None:
+        while True:
+            kind, payload = self._jobs.get()
+            try:
+                if kind == "dictation":
+                    self._process(*payload)
+                elif kind == "action":
+                    self._run_action(*payload)
+            except Exception as exc:
+                print(f"[erreur] {kind} : {exc}")
+                if self.ui:
+                    self.ui.show_message(f"Erreur : {exc}", autohide=6.0)
+            finally:
+                self._jobs.task_done()
+
+    # --------------------------------------------------------- enregistrement
 
     def start_recording(self) -> None:
         if self.recording:
@@ -249,6 +92,10 @@ class App:
         self.recording = True
         play_sound("Tink")
         self.recorder.start()
+        if self.ui:
+            self.ui.show_recording()
+            if self.settings.live_preview:
+                threading.Thread(target=self._preview_loop, daemon=True).start()
 
     def stop_recording(self) -> None:
         if not self.recording:
@@ -256,13 +103,21 @@ class App:
         self.recording = False
         audio = self.recorder.stop()
         play_sound("Pop")
+        if self.recorder.overflowed:
+            print(f"[{ts()}] attention : blocs audio perdus pendant la capture "
+                  "(machine tres chargee), la transcription peut etre trouee")
         duration = len(audio) / SAMPLE_RATE
         if duration < MIN_DURATION_S:
             print(f"[{ts()}] enregistrement trop court ({duration:.1f}s), ignore")
+            if self.ui:
+                self.ui.hide_panel()
             return
         target = frontmost_app()
         print(f"[{ts()}] {duration:.1f}s de parole, transcription en cours...")
-        threading.Thread(target=self._process, args=(audio, target), daemon=True).start()
+        if self.ui:
+            self.ui.show_working("Transcription…")
+        self._ensure_worker()
+        self._jobs.put(("dictation", (audio, target)))
 
     def cancel_recording(self) -> None:
         if not self.recording:
@@ -271,6 +126,8 @@ class App:
         self.recorder.stop()
         play_sound("Bottle")
         print(f"[{ts()}] dictee annulee (autre touche pendant l'enregistrement)")
+        if self.ui:
+            self.ui.hide_panel()
 
     def on_press(self, key: object) -> None:
         if key == self.cfg.pynput_key:
@@ -280,48 +137,173 @@ class App:
         if key == self.cfg.pynput_key:
             self.stop_recording()
 
+    # ----------------------------------------------------------- apercu direct
+
+    def _preview_loop(self) -> None:
+        """Toutes les ~1,2 s, transcrit l'audio accumule avec le petit modele
+        et l'affiche dans le panneau. La passe finale reste turbo ; la langue
+        detectee ici est reutilisee (economise la detection cote turbo)."""
+        time.sleep(0.9)
+        while self.recording:
+            audio = self.recorder.snapshot()
+            if len(audio) >= int(0.8 * SAMPLE_RATE):
+                try:
+                    if self.cfg.language is None and self._detected_lang is None:
+                        self._detected_lang = detect_language(audio)
+                    text = transcribe(audio, PREVIEW_MODEL,
+                                      self.cfg.language or self._detected_lang)
+                    if self.recording and text and self.ui:
+                        self.ui.show_preview(text)
+                except Exception:
+                    return  # l'apercu ne doit jamais casser la dictee
+            time.sleep(1.2)
+
+    # ---------------------------------------------------------------- pipeline
+
+    def _paste(self, text: str) -> None:
+        """Collage avec garde : nos frappes synthetiques repassent par l'event
+        tap fn et annulaient sinon la dictee suivante en cours (auto-sabotage)."""
+        self._pasting.set()
+        try:
+            paste(text, self.kb)
+        finally:
+            self._pasting.clear()
+
     def _process(self, audio: np.ndarray, target: tuple[int, str]) -> None:
         floor, peak = speech_levels(audio)
         if peak < SILENCE_PEAK_RMS:
             print(f"[{ts()}] micro muet (crete RMS {peak:.6f}), ignore. Verifier "
                   "l'entree micro (Reglages Systeme > Son > Entree).")
+            if self.ui:
+                self.ui.show_message("Micro muet — verifier l'entree son", autohide=5.0)
             return
         if peak < SPEECH_DYNAMICS_RATIO * floor:
             print(f"[{ts()}] pas de parole detectee (signal plat : crete {peak:.4f} "
                   f"< {SPEECH_DYNAMICS_RATIO} x plancher {floor:.4f}), ignore.")
+            if self.ui:
+                self.ui.show_message("Pas de parole detectee", autohide=5.0)
             return
-        # niveau normalise : Whisper transcrit mal un signal 50-100x trop bas
-        audio = audio * (0.9 / float(np.abs(audio).max()))
+        audio = normalize(audio, peak)
+        language = self.cfg.language or self._detected_lang
+        if language is None:
+            # detection via le petit modele (~0,2 s) : laisser turbo detecter
+            # doublait la latence de chaque dictee (+2,3 s mesures)
+            language = detect_language(audio)
+        self._detected_lang = None
         t0 = time.monotonic()
         try:
-            text = clean(transcribe(audio, self.cfg.model, self.cfg.language))
+            text = clean(transcribe(audio, self.cfg.model, language))
         except Exception as exc:
             print(f"[erreur] transcription : {exc}")
+            if self.ui:
+                self.ui.show_message(f"Erreur de transcription : {exc}", autohide=6.0)
             return
         elapsed = time.monotonic() - t0
         if not text:
             print(f"[{ts()}] transcription vide, rien a coller")
+            if self.ui:
+                self.ui.hide_panel()
             return
         print(f"[{ts()}] transcrit en {elapsed:.1f}s : {text}")
+        if self.habits:
+            self.habits.record(text, target[1], language)
+        if self.settings.preview_before_paste and self.ui:
+            self._last = {"text": text, "target": target, "pasted": False}
+            self.ui.show_final(text, pasted=False)
+            return
         current = frontmost_app()
         if current[0] != target[0]:
             clipboard_set(text)
             print(f"[{ts()}] app active changee pendant la transcription "
                   f"({target[1]} -> {current[1]}) : texte laisse dans le "
                   "presse-papiers, coller avec Cmd+V.")
+            self._last = {"text": text, "target": target, "pasted": False}
+            if self.ui:
+                self.ui.show_final(text, pasted=False,
+                                   note="App changee — texte copie, coller avec Cmd+V")
             return
-        paste(text, self.kb)
+        self._paste(text)
         print(f"[{ts()}] colle dans {target[1]}")
+        self._last = {"text": text, "target": target, "pasted": True}
+        if self.ui:
+            self.ui.show_final(text, pasted=True)
 
-    def run(self) -> None:
-        fn_listener = None
-        if self.cfg.key_name == "fn":
-            fn_listener = FnListener(self.start_recording, self.stop_recording, self.cancel_recording)
-            fn_listener.prepare()
-        print("Prechargement du modele (telechargement HuggingFace au premier lancement)...")
-        transcribe(np.zeros(SAMPLE_RATE // 2, dtype=np.float32), self.cfg.model, self.cfg.language)
-        print(f"Pret. Maintenir [{self.cfg.key_name}] pour dicter, relacher pour coller. "
-              "Ctrl+C pour quitter.")
+    # -------------------------------------------------------------- actions IA
+
+    def request_action(self, task: str, lang: str | None = None) -> None:
+        """Appele par l'UI (boutons du panneau). Traite dans le worker."""
+        self._ensure_worker()
+        self._jobs.put(("action", (task, lang)))
+
+    def request_paste_last(self) -> None:
+        """Bouton Coller (mode apercu avant collage, ou app changee)."""
+        self._ensure_worker()
+        self._jobs.put(("action", ("paste", None)))
+
+    def _run_action(self, task: str, lang: str | None) -> None:
+        if self._last is None:
+            return
+        src = dict(self._last)
+        if task == "paste":
+            self._paste_result(src["text"], src)
+            return
+        if self.ai is None:
+            if self.ui:
+                self.ui.show_message("Moteur IA indisponible", autohide=5.0)
+            return
+        label = ACTION_LABELS.get(task, task)
+        if task == "translate":
+            label += f" ({TRANSLATE_LANGS.get(lang, lang)})"
+        if self.ui:
+            self.ui.show_working(f"{label}…")
+        context = ""
+        if task in ("pro", "friendly") and self.settings.read_context:
+            try:
+                context = read_conversation(src["target"][0])
+            except Exception:
+                context = ""  # meilleur effort : le ton marche aussi sans contexte
+        profile = ""
+        if self.habits and self.settings.habits_enabled:
+            profile = self.habits.profile_summary()
+        t0 = time.monotonic()
+        try:
+            result = self.ai.transform(task, src["text"], lang=lang,
+                                       context=context, profile=profile)
+        except Exception as exc:
+            print(f"[erreur] {label} : {exc}")
+            if self.ui:
+                self.ui.show_message(f"{label} impossible : {exc}", autohide=6.0)
+            return
+        print(f"[{ts()}] {label} en {time.monotonic() - t0:.1f}s : {result}")
+        self._paste_result(result, src)
+
+    def _paste_result(self, text: str, src: dict) -> None:
+        """Colle un resultat a la place de la dictee d'origine si possible :
+        meme app active + deja colle -> Cmd+Z puis re-collage ; meme app non
+        colle -> collage simple ; app differente -> presse-papiers seulement."""
+        current = frontmost_app()
+        if current[0] != src["target"][0]:
+            clipboard_set(text)
+            self._last = {"text": text, "target": src["target"], "pasted": False}
+            if self.ui:
+                self.ui.show_final(text, pasted=False,
+                                   note="Texte copie — coller avec Cmd+V")
+            return
+        self._pasting.set()
+        try:
+            if src["pasted"]:
+                press_undo(self.kb)
+            paste(text, self.kb)
+        finally:
+            self._pasting.clear()
+        print(f"[{ts()}] colle dans {src['target'][1]}")
+        self._last = {"text": text, "target": src["target"], "pasted": True}
+        if self.ui:
+            self.ui.show_final(text, pasted=True)
+
+    # -------------------------------------------------------------------- boot
+
+    def _startup_report(self) -> None:
         if load_dictionary():
             print(f"Dictionnaire personnel charge : {DICTIONARY_PATH}")
         volume = input_volume()
@@ -329,11 +311,59 @@ class App:
             print(f"[attention] volume d'entree micro bas ({volume}/100) : le signal "
                   "est normalise automatiquement, mais monter l'entree ameliore la "
                   "precision (Reglages Systeme > Son > Entree).")
+
+    def _boot_models(self) -> None:
+        """Prechargements longs, en arriere-plan pour ne pas bloquer l'UI."""
+        if self.ui:
+            self.ui.set_status("Chargement du modele…")
+        preload(self.cfg.model, self.cfg.language)
+        if self.ui and self.settings.live_preview:
+            preload(PREVIEW_MODEL, self.cfg.language)
+        self.recorder.prepare()  # premiere ouverture du stream micro : ~2 s, payee ici
+        self._startup_report()
+        print(f"Pret. Maintenir [{self.cfg.key_name}] pour dicter, relacher pour "
+              "coller. Ctrl+C pour quitter.")
+        if self.ui:
+            self.ui.set_status(f"Pret — maintenir {self.cfg.key_name} pour dicter")
+            if self.ai is not None:
+                self.ai.warm_up()
+
+    def run(self) -> None:
+        fn_listener = None
+        if self.cfg.key_name == "fn":
+            fn_listener = FnListener(self.start_recording, self.stop_recording,
+                                     self.cancel_recording,
+                                     is_pasting=self._pasting.is_set)
+            fn_listener.prepare()
+        preload_sounds("Tink", "Pop", "Bottle")
+        if self.ui is not None:
+            self._run_with_ui(fn_listener)
+        else:
+            self._run_terminal(fn_listener)
+
+    def _run_terminal(self, fn_listener: FnListener | None) -> None:
+        print("Prechargement du modele (telechargement HuggingFace au premier lancement)...")
+        self._boot_models()
         if fn_listener is not None:
             fn_listener.run()
         else:
             with keyboard.Listener(on_press=self.on_press, on_release=self.on_release) as listener:
                 listener.join()
+
+    def _run_with_ui(self, fn_listener: FnListener | None) -> None:
+        from AppKit import NSApplication, NSApplicationActivationPolicyAccessory
+        from PyObjCTools import AppHelper
+
+        ns_app = NSApplication.sharedApplication()
+        ns_app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
+        self.ui.setup()
+        print("Prechargement du modele (telechargement HuggingFace au premier lancement)...")
+        threading.Thread(target=self._boot_models, daemon=True).start()
+        if fn_listener is not None:
+            fn_listener.attach_to_current_runloop()
+        else:
+            keyboard.Listener(on_press=self.on_press, on_release=self.on_release).start()
+        AppHelper.runEventLoop()
 
 
 def main() -> None:
@@ -347,10 +377,23 @@ def main() -> None:
                         help="touche push-to-talk (defaut : fn, comme Wispr Flow)")
     parser.add_argument("--language", default=None,
                         help="forcer la langue (fr, en...) ; defaut : auto-detection")
+    parser.add_argument("--no-ui", action="store_true",
+                        help="mode terminal : pas de panneau flottant ni de barre de menus")
     args = parser.parse_args()
-    cfg = Config(model=args.model, key_name=args.key, language=args.language)
+    cfg = Config(model=args.model, key_name=args.key, language=args.language,
+                 use_ui=not args.no_ui)
+    settings = Settings.load()
+    if cfg.use_ui:
+        from localflow.ai import AIEngine
+        from localflow.habits import Habits
+        from localflow.ui import UI
+
+        app = App(cfg, settings=settings, ai=AIEngine(), habits=Habits(settings))
+        app.ui = UI(settings, app)
+    else:
+        app = App(cfg, settings=settings)
     try:
-        App(cfg).run()
+        app.run()
     except KeyboardInterrupt:
         print("\nArret.")
     except PermissionError as exc:
