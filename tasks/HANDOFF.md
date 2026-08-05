@@ -28,15 +28,21 @@ habitudes d'ecriture locales, et les 9 problemes de perf de l'audit corriges.
 
 ## Restant (ordonne)
 
-1. Retour de la revue adversariale finale (agent en cours au moment du handoff),
-   appliquer les correctifs eventuels
-2. Push + PR + merge dans main (accord donne par Antonin : "tu pourras tout
-   deployer") -- repo public antoninmarcon-maker/local-flow, pas de Vercel
-3. TEST CLAVIER REEL par Antonin : fn maintenu -> panneau + apercu en direct ->
+1. TEST CLAVIER REEL par Antonin : fn maintenu -> panneau + apercu en direct ->
    collage ; boutons Corriger / -> EN / -> ES / Pro / Amical (remplacement
    Cmd+Z) ; menu 🎙 (toggles + langues) ; "Valider avant de coller"
-4. (reporte) Verif post LinkedIn du 07/07 (portfolio-weekly-linkedin),
+2. (reporte) Verif post LinkedIn du 07/07 (portfolio-weekly-linkedin),
    engagement dans ~/.claude/voice/engagement-log.md
+
+## Revue et merge (fait)
+
+- Revue adversariale (agent) : 7 defauts importants + 8 mineurs, TOUS corriges
+  (commit "fix: correctifs de la revue adversariale") -- notamment : langue
+  d'apercu passee par le job (plus d'attribut partage), jetons synthetiques
+  consommes par le tap (plus de garde temporelle), compilation shim atomique,
+  boot sous try/except, toggle "ton adapte a l'app" enfin cable
+- Boot final de l'app reelle avec UI : "Pret" + Apple Intelligence, OK
+- PR #1 mergee (squash) dans main, branche supprimee
 
 ## Pieges connus
 
@@ -62,5 +68,6 @@ habitudes d'ecriture locales, et les 9 problemes de perf de l'audit corriges.
 
 ## Prochain deblocant
 
-Retour de la revue finale, puis push + PR + merge (Restant 1-2). A la reprise
-("reprends") : verifier ou en est la PR, puis Restant 3.
+Rien de bloquant cote code : v2 mergee dans main. A la reprise ("reprends") :
+demander a Antonin le resultat du test clavier reel (Restant 1), corriger ce
+qui remonte, puis Restant 2.
