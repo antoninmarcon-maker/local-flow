@@ -57,6 +57,25 @@ def test_keydown_sans_fn_ignore() -> None:
     assert log == [], log
 
 
+def test_collage_synthetique_n_annule_pas() -> None:
+    """Regression : le Cmd+V synthetique du collage de la dictee n repasse par
+    l'event tap et annulait la dictee n+1 en cours d'enregistrement."""
+    log: list = []
+    pasting = {"on": False}
+    listener = FnListener(
+        on_press=lambda: log.append("press"),
+        on_release=lambda: log.append("release"),
+        on_cancel=lambda: log.append("cancel"),
+        is_pasting=lambda: pasting["on"],
+    )
+    send(listener, make_fn_event(True))       # dictee n+1 demarre
+    pasting["on"] = True
+    send(listener, make_keydown(9))           # 'v' synthetique du collage de n
+    pasting["on"] = False
+    send(listener, make_fn_event(False))      # fin normale de la dictee n+1
+    assert log == ["press", "release"], log
+
+
 def test_autres_modificateurs_ignores() -> None:
     log: list = []
     listener = make_listener(log)
@@ -71,5 +90,6 @@ if __name__ == "__main__":
     test_hold_release()
     test_combo_annule()
     test_keydown_sans_fn_ignore()
+    test_collage_synthetique_n_annule_pas()
     test_autres_modificateurs_ignores()
-    print("OK : machine a etats fn (press/release, annulation combo, filtres)")
+    print("OK : machine a etats fn (press/release, annulation combo, garde collage, filtres)")

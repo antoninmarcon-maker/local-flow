@@ -54,6 +54,43 @@ Boucle cible : maintenir une touche -> parler -> relacher -> le texte apparait d
       passe sur le nouveau. TEST CLAVIER REEL VALIDE par Antonin (2026-07-12),
       volume micro laisse a 38/100 : la dictee colle. Merge dans main.
 
+## Chantier v2 (2026-08-05) : perf + panneau + IA on-device
+
+- [x] Audit expert perf/robustesse (agent) : 9 problemes confirmes et mesures
+      (auto-detection de langue +2,3 s par dictee, Cmd+V synthetique annulant la
+      dictee suivante via l'event tap, stream micro recree a chaque appui --
+      1re ouverture 2,1 s mesuree, afplay en retard de ~0,9 s, restauration
+      presse-papiers a double defaillance, _process non serialises, normalisation
+      sur max() ecrasee par un transitoire, overflow micro muet, chemin README faux)
+- [x] Refactor en modules : config, macos, audio, stt, textproc, clipboard,
+      hotkey, context, habits, ai, ui, vad + app.py orchestrateur. Tous les
+      correctifs de l'audit integres (worker unique, garde is_pasting, stream
+      chaud, NSSound, detection de langue par le petit modele, restauration
+      conditionnelle, normalisation p95, alerte overflow)
+- [x] UI : icone barre de menus (reglages cochables, langues de traduction
+      EN/ES/DE/IT/PT cochables, defaut EN+ES) + panneau flottant non-activant
+      (NSVisualEffectView) avec apercu en direct pendant la dictee (modele base,
+      0,26 s par passe, cache multi-modeles turbo+base)
+- [x] Moteur IA on-device : native/afmshim.swift (FoundationModels, compile
+      automatiquement, hash dans le nom du binaire) -- corriger / traduire /
+      pro / amical, prompts few-shot calibres ; repli mlx-lm (extra fallback) ;
+      valide en reel sur la machine (Apple Intelligence actif, 0,6-2,7 s)
+- [x] Contexte : registre pro/amical par app active (navigateurs : titre de
+      fenetre), lecture du fil visible via Accessibilite (AXEnhancedUserInterface
+      pour Chrome/Electron), injecte dans les prompts -- meilleur effort
+- [x] Habitudes d'ecriture : journal local history.jsonl (opt-out), profil de
+      style (tutoiement, emojis, longueur, ouvertures) injecte dans les prompts,
+      suggestions de dictionnaire pour noms propres recurrents
+- [x] Garde anti non-parole : VAD Silero v5 via onnxruntime (modele 2,3 MB MIT
+      vendorise), apres constat live que dynamique de trames et WebRTC VAD
+      laissent passer bruit ambiant/haut-parleurs normalises ; filet final
+      anti-hallucination sur no_speech_prob/avg_logprob des segments
+- [x] Tests : 9 suites (process avec actions IA et apercu-avant-collage,
+      fn+garde collage, stt/VAD signaux reels, context, settings, habits,
+      ai reel, ui_live AppKit reelle pilotee par programme, pipeline FR/EN/ES
+      + mp3). Toutes vertes sur la machine
+- [ ] Test clavier reel par Antonin (fn, panneau, boutons, remplacement Cmd+Z)
+
 ## Skips deliberes (YAGNI, a ajouter si besoin)
 - Barre visuelle a l'ecran (Wispr) -> son systeme suffit en v1
 - Mode toggle / double-tap -> hold-to-talk seulement

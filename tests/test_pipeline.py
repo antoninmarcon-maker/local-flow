@@ -44,20 +44,42 @@ def test_clean() -> None:
     assert clean("  Deux   espaces. ") == "Deux espaces."
 
 
+def to_mp3(src: Path) -> Path:
+    """Le micro passe en memoire dans l'app ; le mp3 verifie le chemin fichier
+    (ffmpeg) de bout en bout, avec la perte de compression d'un vrai fichier."""
+    dst = src.with_suffix(".mp3")
+    subprocess.run(["ffmpeg", "-y", "-loglevel", "error", "-i", str(src),
+                    "-codec:a", "libmp3lame", "-qscale:a", "4", str(dst)], check=True)
+    return dst
+
+
+def first_voice(*names: str) -> str | None:
+    return next((v for v in names if voice_available(v)), None)
+
+
 def test_transcription() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         en = Path(tmp) / "en.aiff"
         say("Hello, this is a local dictation test.", en)
         check("EN", en, ["local", "dictation", "test"])
+        check("EN mp3", to_mp3(en), ["local", "dictation", "test"])
 
-        for voice in ("Thomas", "Amélie", "Amelie"):
-            if voice_available(voice):
-                fr = Path(tmp) / "fr.aiff"
-                say("Bonjour, ceci est un test de dictée vocale locale.", fr, voice)
-                check("FR", fr, ["test", "vocale", "locale"])
-                break
+        fr_voice = first_voice("Thomas", "Amélie", "Amelie")
+        if fr_voice:
+            fr = Path(tmp) / "fr.aiff"
+            say("Bonjour, ceci est un test de dictée vocale locale.", fr, fr_voice)
+            check("FR", fr, ["test", "vocale", "locale"])
+            check("FR mp3", to_mp3(fr), ["test", "vocale", "locale"])
         else:
             print("  FR : aucune voix francaise installee, test FR saute")
+
+        es_voice = first_voice("Mónica", "Monica", "Paulina")
+        if es_voice:
+            es = Path(tmp) / "es.aiff"
+            say("Hola, esta es una prueba de dictado por voz.", es, es_voice)
+            check("ES", es, ["prueba", "voz"])
+        else:
+            print("  ES : aucune voix espagnole installee, test ES saute")
 
 
 if __name__ == "__main__":

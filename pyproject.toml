@@ -7,7 +7,12 @@ dependencies = [
     "mlx-whisper>=0.4",
     "sounddevice>=0.5",
     "pynput>=1.7",
+    "onnxruntime>=1.28.0",
 ]
+
+[project.optional-dependencies]
+# Repli du moteur IA si Apple Intelligence est indisponible : uv sync --extra fallback
+fallback = ["mlx-lm>=0.24"]
 
 [project.scripts]
 localflow = "localflow.app:main"

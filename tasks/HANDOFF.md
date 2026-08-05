@@ -1,63 +1,73 @@
 ---
-statut: termine
+statut: en-cours
 auto-resume: false
-updated: 2026-07-12T00:05:00+02:00
+updated: 2026-08-05T01:00:00+02:00
 ---
 
 # HANDOFF - local-flow
 
 ## Objectif
 
-Dictee vocale 100 % locale (clone Wispr Flow) operationnelle sur le M2 8 GB :
-maintenir fn, parler, relacher, le texte se colle dans l'app active. ATTEINT,
-y compris a volume d'entree micro bas (fix garde anti-silence valide et merge).
+v2 : dictee locale AVEC panneau flottant (apercu en direct), actions IA
+on-device (corriger / traduire EN-ES cochables / pro / amical via Apple
+Intelligence), ton adapte a l'app active (+ lecture du fil par Accessibilite),
+habitudes d'ecriture locales, et les 9 problemes de perf de l'audit corriges.
 
 ## Fait (verifie)
 
-- App complete sur main : pipeline mlx-whisper turbo, fn via event tap Quartz,
-  annulation combo, dictionnaire personnel, collage Cmd+V + restauration
-- Debug du 2026-07-03 clos (garde de focus, chemins de sortie parlants, alerte
-  volume). Test manuel fn VALIDE par Antonin le 03/07. Details : tasks/todo.md
-- Repo GitHub PUBLIC : https://github.com/antoninmarcon-maker/local-flow
-- FIX GARDE ANTI-SILENCE (2026-07-11, branche claude/localflow-mic-sensitivity-250316,
-  3 commits NON POUSSES : f93938a fix, b744084 readme, f773de7 tasks) :
-  le seuil RMS absolu 0.005 rejetait la vraie parole a 38/100 de volume d'entree
-  (RMS clip 0.0002-0.0019, 3 dictees avalees le 11/07 a 22h20). Remplace par une
-  detection par dynamique de trames (crete p95 >= 3 x plancher p10 des RMS de
-  30 ms, invariante au gain : parole reelle >= 7, bruit plat <= 1.8) +
-  normalisation crete 0.9 avant Whisper. VERIFIE : test de regression qui echoue
-  sur l'ancien code et passe sur le nouveau, E2E vrai modele turbo aux 3 niveaux
-  RMS du bug (transcription identique aux 3 gains), suite complete verte
-  (test_process 6 chemins, test_fn_listener, test_pipeline EN+FR)
-- gstack mis a jour 1.57.9.0 -> 1.60.1.0 (2026-07-11)
+- Chantier sur branche feat/panneau-ia-live (worktree
+  .claude/worktrees/localflow-v2-panel-ia), commits atomiques
+- Refactor complet en modules (localflow/*.py), tous les correctifs de l'audit
+  integres -- details : tasks/todo.md section "Chantier v2"
+- 9 suites de tests VERTES sur la machine, dont : moteur IA reel (Apple
+  Intelligence repond, 0,6-2,7 s par action), UI AppKit reelle pilotee par
+  programme, pipeline FR/EN/ES + mp3, VAD Silero sur signaux reels
+- App complete lancee en reel : boot OK, dictee f8 captee, transcription et
+  collage OK (16 s sous pression memoire : modeles pagines, comportement connu)
+- README, todo, lessons a jour
 
 ## Restant (ordonne)
 
-1. (reporte du 03/07, a verifier) Post LinkedIn local-flow : etait planifie mardi
-   07/07 via portfolio-weekly-linkedin. Verifier s'il est parti ; mesure J+7
-   (~14/07) dans ~/.claude/voice/engagement-log.md
-2. (optionnel) Piste v2 : parakeet-mlx (2x plus rapide, meilleur en francais)
-3. (optionnel) Ameliorations README listees dans Pistes d'evolution
+1. TEST CLAVIER REEL par Antonin : fn maintenu -> panneau + apercu en direct ->
+   collage ; boutons Corriger / -> EN / -> ES / Pro / Amical (remplacement
+   Cmd+Z) ; menu 🎙 (toggles + langues) ; "Valider avant de coller"
+2. (reporte) Verif post LinkedIn du 07/07 (portfolio-weekly-linkedin),
+   engagement dans ~/.claude/voice/engagement-log.md
 
-## Prochain deblocant
+## Revue et merge (fait)
 
-Rien de bloquant : fix garde anti-silence VALIDE au clavier reel par Antonin
-(2026-07-12, volume micro laisse a 38/100), merge dans main et pousse. Worktree
-et branche de chantier supprimes le 2026-07-12. A la reprise ("reprends"),
-traiter le Restant 1 (verif post LinkedIn).
+- Revue adversariale (agent) : 7 defauts importants + 8 mineurs, TOUS corriges
+  (commit "fix: correctifs de la revue adversariale") -- notamment : langue
+  d'apercu passee par le job (plus d'attribut partage), jetons synthetiques
+  consommes par le tap (plus de garde temporelle), compilation shim atomique,
+  boot sous try/except, toggle "ton adapte a l'app" enfin cable
+- Boot final de l'app reelle avec UI : "Pret" + Apple Intelligence, OK
+- PR #1 mergee (squash) dans main, branche supprimee
 
 ## Pieges connus
 
-- Premiere inference d'un process : chargement modele ~5-10 s, attendre "Pret.".
-  Sous pression memoire une transcription peut prendre 10-20 s ("transcription
-  en cours..." s'affiche).
-- Permissions TCC attachees au host : Terminal pour LocalFlow.command.
-- Restauration presse-papiers : texte seulement.
+- Le micro entend les haut-parleurs : YouTube qui joue = vraie parole transcrite
+  (constate en live le 05/08, d'abord pris pour une hallucination). Verifier
+  pmset -g assertions avant tout diagnostic de faux positif micro.
+- Silero ONNX : chaque trame de 512 doit etre prefixee de 64 echantillons de
+  contexte, sinon sorties ~0 silencieuses (localflow/vad.py).
+- from mlx_whisper import transcribe importe la FONCTION (re-export du package),
+  pas le module : passer par importlib pour patcher ModelHolder (localflow/stt.py).
+- AppHelper.stopEventLoop() termine le process : dans un test AppKit, tout
+  verifier avant, exit code explicite (tests/test_ui_live.py).
+- Sous pression memoire (8 GB), premiere dictee apres pause : 10-20 s, modeles
+  pagines. Pas un bug, documente au README.
+- Seuils audio : ne JAMAIS revenir a un seuil de niveau absolu (lecon 07-11) ;
+  la garde principale est le VAD Silero, la dynamique de trames n'est que le
+  repli sans onnxruntime.
 - Tester du collage synthetique pendant que quelqu'un utilise le Mac : les
-  evenements partent vers SON app frontale (lecons du 03/07).
-- Seuils audio : ne JAMAIS revenir a un seuil de niveau absolu, il n'est pas
-  invariant au gain d'entree micro (lecon du 11/07). La doublure parole() des
-  tests doit garder une dynamique de parole (un sinus plat est rejete).
-- LocalFlow.command lance depuis le repo PRINCIPAL utilise le code de main,
-  pas celui de la branche worktree : pour tester le fix avant merge, lancer
-  depuis le worktree ou merger d'abord.
+  evenements partent vers SON app frontale (lecon du 03/07, re-verifiee le
+  05/08 : un test a colle dans le Chrome d'Antonin pendant YouTube).
+- LocalFlow.command lance depuis le repo PRINCIPAL utilise le code de main :
+  pour tester avant merge, lancer depuis le worktree.
+
+## Prochain deblocant
+
+Rien de bloquant cote code : v2 mergee dans main. A la reprise ("reprends") :
+demander a Antonin le resultat du test clavier reel (Restant 1), corriger ce
+qui remonte, puis Restant 2.
