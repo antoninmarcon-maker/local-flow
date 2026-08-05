@@ -31,6 +31,7 @@ from localflow.hotkey import FN_KEYCODE, KEYS, FnListener
 from localflow.macos import frontmost_app, input_volume, play_sound, preload_sounds, ts
 from localflow.stt import PREVIEW_MODEL, detect_language, load_dictionary, preload, transcribe
 from localflow.textproc import clean
+from localflow.vad import MIN_SPEECH_FRAMES, MIN_SPEECH_RATIO, speech_stats
 
 ACTION_LABELS = {
     "correct": "Correction",
@@ -148,12 +149,19 @@ class App:
             audio = self.recorder.snapshot()
             if len(audio) >= int(0.8 * SAMPLE_RATE):
                 try:
-                    if self.cfg.language is None and self._detected_lang is None:
-                        self._detected_lang = detect_language(audio)
-                    text = transcribe(audio, PREVIEW_MODEL,
-                                      self.cfg.language or self._detected_lang)
-                    if self.recording and text and self.ui:
-                        self.ui.show_preview(text)
+                    audio = normalize(audio, speech_levels(audio)[1])
+                    try:
+                        _ratio, frames = speech_stats(audio)
+                        heard = frames >= MIN_SPEECH_FRAMES
+                    except Exception:
+                        heard = True  # pas de VAD : on tente l'apercu quand meme
+                    if heard:
+                        if self.cfg.language is None and self._detected_lang is None:
+                            self._detected_lang = detect_language(audio)
+                        text = transcribe(audio, PREVIEW_MODEL,
+                                          self.cfg.language or self._detected_lang)
+                        if self.recording and text and self.ui:
+                            self.ui.show_preview(text)
                 except Exception:
                     return  # l'apercu ne doit jamais casser la dictee
             time.sleep(1.2)
@@ -177,13 +185,25 @@ class App:
             if self.ui:
                 self.ui.show_message("Micro muet — verifier l'entree son", autohide=5.0)
             return
-        if peak < SPEECH_DYNAMICS_RATIO * floor:
-            print(f"[{ts()}] pas de parole detectee (signal plat : crete {peak:.4f} "
-                  f"< {SPEECH_DYNAMICS_RATIO} x plancher {floor:.4f}), ignore.")
-            if self.ui:
-                self.ui.show_message("Pas de parole detectee", autohide=5.0)
-            return
         audio = normalize(audio, peak)
+        # Garde anti non-parole : VAD Silero sur l'audio normalise (le bruit
+        # ambiant amplifie faisait halluciner Whisper avec confiance) ; repli
+        # sur la dynamique de trames si onnxruntime manque.
+        try:
+            ratio, frames = speech_stats(audio)
+            if frames < MIN_SPEECH_FRAMES or ratio < MIN_SPEECH_RATIO:
+                print(f"[{ts()}] pas de parole detectee (VAD : {ratio:.0%} de "
+                      f"trames parlees), ignore.")
+                if self.ui:
+                    self.ui.show_message("Pas de parole detectee", autohide=5.0)
+                return
+        except Exception:
+            if peak < SPEECH_DYNAMICS_RATIO * floor:
+                print(f"[{ts()}] pas de parole detectee (signal plat : crete {peak:.4f} "
+                      f"< {SPEECH_DYNAMICS_RATIO} x plancher {floor:.4f}), ignore.")
+                if self.ui:
+                    self.ui.show_message("Pas de parole detectee", autohide=5.0)
+                return
         language = self.cfg.language or self._detected_lang
         if language is None:
             # detection via le petit modele (~0,2 s) : laisser turbo detecter

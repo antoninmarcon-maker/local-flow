@@ -7,6 +7,7 @@ dependencies = [
     "mlx-whisper>=0.4",
     "sounddevice>=0.5",
     "pynput>=1.7",
+    "onnxruntime>=1.28.0",
 ]
 
 [project.optional-dependencies]

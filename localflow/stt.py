@@ -28,13 +28,22 @@ _INFER_LOCK = threading.Lock()
 _cache_installed = False
 
 
+def _transcribe_module():
+    """Le module mlx_whisper.transcribe -- pas la fonction du meme nom que le
+    package re-exporte par-dessus (from mlx_whisper import transcribe renvoie
+    la fonction, silencieusement)."""
+    import importlib
+
+    return importlib.import_module("mlx_whisper.transcribe")
+
+
 def _install_multimodel_cache() -> None:
     """Remplace mlx_whisper.transcribe.ModelHolder (cache a 1 entree) par un
     cache dict {(chemin, dtype): modele}. RAM : turbo ~1,6 GB + base ~80 MB."""
     global _cache_installed
     if _cache_installed:
         return
-    from mlx_whisper import transcribe as _t
+    _t = _transcribe_module()
 
     models: dict = {}
 
@@ -65,6 +74,20 @@ def load_dictionary() -> str | None:
     return ("Vocabulaire : " + ", ".join(words) + ".") if words else None
 
 
+def looks_hallucinated(result: dict) -> bool:
+    """Vrai si Whisper a probablement invente du texte sur du non-parole.
+
+    Le bruit ambiant normalise passe parfois la garde de dynamique et Whisper
+    hallucine alors une phrase plausible. Signature : tous les segments ont un
+    no_speech_prob eleve, ou une avg_logprob tres basse (decodage force)."""
+    segments = result.get("segments") or []
+    if not segments:
+        return False
+    def suspicious(seg: dict) -> bool:
+        return seg.get("no_speech_prob", 0.0) > 0.5 or seg.get("avg_logprob", 0.0) < -1.2
+    return all(suspicious(seg) for seg in segments)
+
+
 def transcribe(audio: "np.ndarray | str", model: str, language: str | None) -> str:
     import mlx_whisper  # import differe : coute ~2 s au premier appel
 
@@ -76,17 +99,23 @@ def transcribe(audio: "np.ndarray | str", model: str, language: str | None) -> s
             language=language,
             initial_prompt=load_dictionary(),
         )
-    return str(result["text"]).strip()
+    text = str(result["text"]).strip()
+    if text and looks_hallucinated(result):
+        probs = [round(s.get("no_speech_prob", 0.0), 2) for s in result["segments"]]
+        print(f"[stt] texte juge hallucine sur du non-parole "
+              f"(no_speech_prob {probs}), ignore : {text!r}")
+        return ""
+    return text
 
 
 def detect_language(audio: np.ndarray, model: str = PREVIEW_MODEL) -> str:
     """Detecte la langue avec le petit modele (~0,1-0,3 s) au lieu de laisser
     turbo le faire (passe encodeur complete, +2,3 s mesures par dictee)."""
     import mlx.core as mx
-    from mlx_whisper import transcribe as _t
     from mlx_whisper.audio import N_FRAMES, N_SAMPLES, log_mel_spectrogram, pad_or_trim
 
     _install_multimodel_cache()
+    _t = _transcribe_module()
     with _INFER_LOCK:
         m = _t.ModelHolder.get_model(resolve(model), mx.float16)
         if not m.is_multilingual:

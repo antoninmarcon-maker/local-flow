@@ -13,7 +13,10 @@ MIN_DURATION_S = 0.3
 # mesure >= 7 quel que soit le gain ; bruit plat <= 1.8. Vrai VAD (Silero) si insuffisant.
 FRAME_S = 0.03
 SILENCE_PEAK_RMS = 1e-5      # crete sous ce niveau : micro muet / zeros numeriques
-SPEECH_DYNAMICS_RATIO = 3.0  # crete p95 >= 3 x plancher p10 => parole
+# Parole reelle mesuree >= 7, bruit plat <= 1.8 ; le bruit ambiant d'une piece
+# calme (clics, ventilateur) monte a ~3-4 et se faisait halluciner par Whisper
+# une fois normalise (constate en live le 2026-08-05 : "that's a lot of fashion").
+SPEECH_DYNAMICS_RATIO = 4.5  # crete p95 >= 4.5 x plancher p10 => parole
 
 
 class Recorder:
