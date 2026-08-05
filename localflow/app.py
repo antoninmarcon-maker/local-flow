@@ -11,6 +11,7 @@ import argparse
 import queue
 import threading
 import time
+from collections import deque
 
 import numpy as np
 from pynput import keyboard
@@ -26,7 +27,7 @@ from localflow.audio import (
 )
 from localflow.clipboard import clipboard_set, paste, press_undo
 from localflow.config import DICTIONARY_PATH, TRANSLATE_LANGS, Config, Settings
-from localflow.context import read_conversation
+from localflow.context import detect_register, read_conversation, window_title
 from localflow.hotkey import FN_KEYCODE, KEYS, FnListener
 from localflow.macos import frontmost_app, input_volume, play_sound, preload_sounds, ts
 from localflow.stt import PREVIEW_MODEL, detect_language, load_dictionary, preload, transcribe
@@ -40,6 +41,9 @@ ACTION_LABELS = {
     "friendly": "Reformulation amicale",
 }
 
+# Apps ou Cmd+Z n'annule pas un collage : remplacer y dupliquerait le texte.
+UNDO_UNSAFE_APPS = {"Terminal", "iTerm2", "Alacritty", "kitty", "Warp", "Ghostty"}
+
 
 class App:
     def __init__(self, cfg: Config, settings: Settings | None = None,
@@ -52,12 +56,31 @@ class App:
         self.recorder = Recorder()
         self.kb = keyboard.Controller()
         self.recording = False
-        self._pasting = threading.Event()
+        # jetons horodates de frappes synthetiques (Cmd+V / Cmd+Z) : consommes
+        # par l'event tap A L'ARRIVEE de l'evenement, pas apres un delai fixe --
+        # un thread principal gele > 1 s faisait fuiter l'ancienne garde
+        # temporelle et le collage annulait la dictee suivante
+        self._synthetic: deque = deque()
         self._jobs: queue.Queue = queue.Queue()
         self._worker: threading.Thread | None = None
         self._detected_lang: str | None = None
+        self._preview_gen = 0  # invalide les threads d'apercu des dictees passees
         # derniere dictee : {"text": str, "target": (pid, nom), "pasted": bool}
         self._last: dict | None = None
+
+    def _expect_synthetic(self, count: int) -> None:
+        now = time.monotonic()
+        for _ in range(count):
+            self._synthetic.append(now)
+
+    def _consume_synthetic(self) -> bool:
+        """Appele par l'event tap sur chaque keyDown : vrai si la frappe est
+        l'une des notres (jeton en attente, non expire)."""
+        while self._synthetic:
+            stamp = self._synthetic.popleft()
+            if time.monotonic() - stamp < 15.0:
+                return True
+        return False
 
     # ------------------------------------------------------------------ worker
     # Un unique thread consomme dictees et actions IA : deux transcriptions
@@ -91,12 +114,23 @@ class App:
         if self.recording:
             return
         self.recording = True
+        self._detected_lang = None
+        self._preview_gen += 1
         play_sound("Tink")
-        self.recorder.start()
+        try:
+            self.recorder.start()
+        except Exception as exc:
+            self.recording = False
+            play_sound("Bottle")
+            print(f"[{ts()}] micro indisponible : {exc}")
+            if self.ui:
+                self.ui.show_message("Micro indisponible — verifier l'entree son", autohide=5.0)
+            return
         if self.ui:
             self.ui.show_recording()
             if self.settings.live_preview:
-                threading.Thread(target=self._preview_loop, daemon=True).start()
+                threading.Thread(target=self._preview_loop,
+                                 args=(self._preview_gen,), daemon=True).start()
 
     def stop_recording(self) -> None:
         if not self.recording:
@@ -118,7 +152,9 @@ class App:
         if self.ui:
             self.ui.show_working("Transcription…")
         self._ensure_worker()
-        self._jobs.put(("dictation", (audio, target)))
+        # langue detectee par l'apercu passee DANS le job : un attribut partage
+        # se faisait ecraser par un apercu retardataire de la dictee precedente
+        self._jobs.put(("dictation", (audio, target, self._detected_lang)))
 
     def cancel_recording(self) -> None:
         if not self.recording:
@@ -140,12 +176,16 @@ class App:
 
     # ----------------------------------------------------------- apercu direct
 
-    def _preview_loop(self) -> None:
+    def _preview_loop(self, gen: int) -> None:
         """Toutes les ~1,2 s, transcrit l'audio accumule avec le petit modele
         et l'affiche dans le panneau. La passe finale reste turbo ; la langue
-        detectee ici est reutilisee (economise la detection cote turbo)."""
+        detectee ici est reutilisee (economise la detection cote turbo).
+
+        gen : generation de dictee. Un thread d'une dictee passee (reveille
+        apres un enchainement rapide relacher/re-appuyer) se termine au lieu
+        de s'empiler sur _INFER_LOCK et d'afficher des apercus perimes."""
         time.sleep(0.9)
-        while self.recording:
+        while self.recording and gen == self._preview_gen:
             audio = self.recorder.snapshot()
             if len(audio) >= int(0.8 * SAMPLE_RATE):
                 try:
@@ -157,10 +197,12 @@ class App:
                         heard = True  # pas de VAD : on tente l'apercu quand meme
                     if heard:
                         if self.cfg.language is None and self._detected_lang is None:
-                            self._detected_lang = detect_language(audio)
+                            lang = detect_language(audio)
+                            if gen == self._preview_gen:
+                                self._detected_lang = lang
                         text = transcribe(audio, PREVIEW_MODEL,
                                           self.cfg.language or self._detected_lang)
-                        if self.recording and text and self.ui:
+                        if self.recording and gen == self._preview_gen and text and self.ui:
                             self.ui.show_preview(text)
                 except Exception:
                     return  # l'apercu ne doit jamais casser la dictee
@@ -171,13 +213,11 @@ class App:
     def _paste(self, text: str) -> None:
         """Collage avec garde : nos frappes synthetiques repassent par l'event
         tap fn et annulaient sinon la dictee suivante en cours (auto-sabotage)."""
-        self._pasting.set()
-        try:
-            paste(text, self.kb)
-        finally:
-            self._pasting.clear()
+        self._expect_synthetic(1)  # le keyDown "v" du Cmd+V
+        paste(text, self.kb)
 
-    def _process(self, audio: np.ndarray, target: tuple[int, str]) -> None:
+    def _process(self, audio: np.ndarray, target: tuple[int, str],
+                 detected_lang: str | None = None) -> None:
         floor, peak = speech_levels(audio)
         if peak < SILENCE_PEAK_RMS:
             print(f"[{ts()}] micro muet (crete RMS {peak:.6f}), ignore. Verifier "
@@ -204,12 +244,11 @@ class App:
                 if self.ui:
                     self.ui.show_message("Pas de parole detectee", autohide=5.0)
                 return
-        language = self.cfg.language or self._detected_lang
+        language = self.cfg.language or detected_lang
         if language is None:
             # detection via le petit modele (~0,2 s) : laisser turbo detecter
             # doublait la latence de chaque dictee (+2,3 s mesures)
             language = detect_language(audio)
-        self._detected_lang = None
         t0 = time.monotonic()
         try:
             text = clean(transcribe(audio, self.cfg.model, language))
@@ -226,10 +265,20 @@ class App:
             return
         print(f"[{ts()}] transcrit en {elapsed:.1f}s : {text}")
         if self.habits:
-            self.habits.record(text, target[1], language)
+            try:
+                self.habits.record(text, target[1], language)
+            except Exception:
+                pass  # journal best-effort : ne doit jamais bloquer le collage
+        register = None
+        if self.settings.auto_register:
+            try:
+                register = detect_register(target[1], window_title(target[0]))
+            except Exception:
+                register = None
         if self.settings.preview_before_paste and self.ui:
+            clipboard_set(text)  # filet : le panneau s'efface, Cmd+V marche toujours
             self._last = {"text": text, "target": target, "pasted": False}
-            self.ui.show_final(text, pasted=False)
+            self.ui.show_final(text, pasted=False, register=register)
             return
         current = frontmost_app()
         if current[0] != target[0]:
@@ -239,14 +288,14 @@ class App:
                   "presse-papiers, coller avec Cmd+V.")
             self._last = {"text": text, "target": target, "pasted": False}
             if self.ui:
-                self.ui.show_final(text, pasted=False,
+                self.ui.show_final(text, pasted=False, register=register,
                                    note="App changee — texte copie, coller avec Cmd+V")
             return
         self._paste(text)
         print(f"[{ts()}] colle dans {target[1]}")
         self._last = {"text": text, "target": target, "pasted": True}
         if self.ui:
-            self.ui.show_final(text, pasted=True)
+            self.ui.show_final(text, pasted=True, register=register)
 
     # -------------------------------------------------------------- actions IA
 
@@ -300,7 +349,8 @@ class App:
     def _paste_result(self, text: str, src: dict) -> None:
         """Colle un resultat a la place de la dictee d'origine si possible :
         meme app active + deja colle -> Cmd+Z puis re-collage ; meme app non
-        colle -> collage simple ; app differente -> presse-papiers seulement."""
+        colle -> collage simple ; app differente ou app sans annulation de
+        collage (terminaux) -> presse-papiers seulement."""
         current = frontmost_app()
         if current[0] != src["target"][0]:
             clipboard_set(text)
@@ -309,13 +359,20 @@ class App:
                 self.ui.show_final(text, pasted=False,
                                    note="Texte copie — coller avec Cmd+V")
             return
-        self._pasting.set()
-        try:
-            if src["pasted"]:
-                press_undo(self.kb)
-            paste(text, self.kb)
-        finally:
-            self._pasting.clear()
+        if src["pasted"] and current[1] in UNDO_UNSAFE_APPS:
+            clipboard_set(text)
+            self._last = {"text": text, "target": src["target"], "pasted": False}
+            if self.ui:
+                self.ui.show_final(text, pasted=False,
+                                   note=f"Pas de remplacement dans {current[1]} — "
+                                        "texte copie, coller avec Cmd+V")
+            return
+        if src["pasted"]:
+            self._expect_synthetic(2)  # keyDown "z" puis "v"
+            press_undo(self.kb)
+        else:
+            self._expect_synthetic(1)
+        paste(text, self.kb)
         print(f"[{ts()}] colle dans {src['target'][1]}")
         self._last = {"text": text, "target": src["target"], "pasted": True}
         if self.ui:
@@ -333,13 +390,24 @@ class App:
                   "precision (Reglages Systeme > Son > Entree).")
 
     def _boot_models(self) -> None:
-        """Prechargements longs, en arriere-plan pour ne pas bloquer l'UI."""
-        if self.ui:
-            self.ui.set_status("Chargement du modele…")
-        preload(self.cfg.model, self.cfg.language)
-        if self.ui and self.settings.live_preview:
-            preload(PREVIEW_MODEL, self.cfg.language)
-        self.recorder.prepare()  # premiere ouverture du stream micro : ~2 s, payee ici
+        """Prechargements longs, en arriere-plan pour ne pas bloquer l'UI.
+        Toujours sous try/except : un echec (HuggingFace hors-ligne au premier
+        lancement...) laissait sinon l'app zombie sur "Chargement du modele"."""
+        try:
+            self.recorder.prepare()  # d'abord : 1re ouverture ~2 s, et le stream
+            # doit exister meme si le telechargement du modele echoue ensuite
+            if self.ui:
+                self.ui.set_status("Chargement du modele…")
+            preload(self.cfg.model, self.cfg.language)
+            if self.ui and self.settings.live_preview:
+                preload(PREVIEW_MODEL, self.cfg.language)
+        except Exception as exc:
+            print(f"[erreur] chargement des modeles : {exc}")
+            if self.ui:
+                self.ui.set_status("Erreur : modele introuvable — verifier la connexion")
+                self.ui.show_message(f"Chargement du modele impossible : {exc}",
+                                     autohide=10.0)
+            return
         self._startup_report()
         print(f"Pret. Maintenir [{self.cfg.key_name}] pour dicter, relacher pour "
               "coller. Ctrl+C pour quitter.")
@@ -353,7 +421,7 @@ class App:
         if self.cfg.key_name == "fn":
             fn_listener = FnListener(self.start_recording, self.stop_recording,
                                      self.cancel_recording,
-                                     is_pasting=self._pasting.is_set)
+                                     is_pasting=self._consume_synthetic)
             fn_listener.prepare()
         preload_sounds("Tink", "Pop", "Bottle")
         if self.ui is not None:

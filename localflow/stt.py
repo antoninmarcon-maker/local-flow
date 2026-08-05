@@ -37,26 +37,32 @@ def _transcribe_module():
     return importlib.import_module("mlx_whisper.transcribe")
 
 
+_INSTALL_LOCK = threading.Lock()
+
+
 def _install_multimodel_cache() -> None:
     """Remplace mlx_whisper.transcribe.ModelHolder (cache a 1 entree) par un
-    cache dict {(chemin, dtype): modele}. RAM : turbo ~1,6 GB + base ~80 MB."""
+    cache dict {(chemin, dtype): modele}. RAM : turbo ~1,6 GB + base ~80 MB.
+    Sous verrou : l'import de mlx_whisper prend ~2 s, deux threads (boot +
+    apercu) pouvaient installer deux holders et charger turbo deux fois."""
     global _cache_installed
-    if _cache_installed:
-        return
-    _t = _transcribe_module()
+    with _INSTALL_LOCK:
+        if _cache_installed:
+            return
+        _t = _transcribe_module()
 
-    models: dict = {}
+        models: dict = {}
 
-    class _MultiModelHolder:
-        @staticmethod
-        def get_model(model_path: str, dtype):
-            key = (model_path, str(dtype))
-            if key not in models:
-                models[key] = _t.load_model(model_path, dtype=dtype)
-            return models[key]
+        class _MultiModelHolder:
+            @staticmethod
+            def get_model(model_path: str, dtype):
+                key = (model_path, str(dtype))
+                if key not in models:
+                    models[key] = _t.load_model(model_path, dtype=dtype)
+                return models[key]
 
-    _t.ModelHolder = _MultiModelHolder
-    _cache_installed = True
+        _t.ModelHolder = _MultiModelHolder
+        _cache_installed = True
 
 
 def resolve(model: str) -> str:

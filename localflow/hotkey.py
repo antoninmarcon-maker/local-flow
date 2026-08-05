@@ -46,11 +46,15 @@ class FnListener:
                 elif not down and self._fn_down:
                     self._fn_down = False
                     self.on_release()
-        elif type_ == Quartz.kCGEventKeyDown and self._fn_down:
+        elif type_ == Quartz.kCGEventKeyDown:
+            # consomme la frappe attendue AVANT le test fn : une frappe
+            # synthetique arrivee alors qu'aucune dictee ne tourne doit quand
+            # meme etre retiree de la file d'attente (jetons horodates cote App)
             if self.is_pasting():
                 return event  # frappe synthetique de notre collage, pas l'utilisateur
-            self._fn_down = False  # la release de fn qui suivra sera ignoree
-            self.on_cancel()
+            if self._fn_down:
+                self._fn_down = False  # la release de fn qui suivra sera ignoree
+                self.on_cancel()
         return event
 
     def prepare(self) -> None:

@@ -55,9 +55,11 @@ class Habits:
         entries = []
         for line in lines[-PROFILE_WINDOW:]:
             try:
-                entries.append(json.loads(line))
+                entry = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if isinstance(entry, dict):  # `42` est du JSON valide mais pas une entree
+                entries.append(entry)
         return entries
 
     def profile_summary(self) -> str:

@@ -11,8 +11,10 @@ mlx-lm avec un petit modele 4-bit, si le groupe optionnel est installe
 
 import hashlib
 import json
+import os
 import shutil
 import subprocess
+import threading
 from pathlib import Path
 
 from localflow.config import SHIM_DIR
@@ -55,6 +57,8 @@ class AIEngine:
         self.backend: str | None = None
         self._shim_bin: Path | None = None
         self._unavailable_reason = ""
+        self._warmup_lock = threading.Lock()
+        self._mlx = None  # (model, tokenizer) memoise : recharger ~1 GB par action
 
     # ------------------------------------------------------------------- shim
 
@@ -70,14 +74,22 @@ class AIEngine:
                           "xcode-select --install)")
         SHIM_DIR.mkdir(parents=True, exist_ok=True)
         print("Compilation du pont Apple Intelligence (une fois, ~15 s)...")
-        result = subprocess.run(
-            ["swiftc", "-parse-as-library", "-O", "-o", str(bin_path), str(SHIM_SOURCE)],
-            capture_output=True, text=True, timeout=300,
-        )
-        if result.returncode != 0:
-            raise AIError(f"compilation du shim echouee : {result.stderr.strip()[:300]}")
+        # compilation vers un fichier temporaire puis os.replace atomique :
+        # deux compilations concurrentes vers le meme chemin produisaient un
+        # binaire tronque... mis en cache sous le nom-hash attendu, definitivement
+        tmp_path = bin_path.with_name(f"{bin_path.name}.tmp{os.getpid()}")
+        try:
+            result = subprocess.run(
+                ["swiftc", "-parse-as-library", "-O", "-o", str(tmp_path), str(SHIM_SOURCE)],
+                capture_output=True, text=True, timeout=300,
+            )
+            if result.returncode != 0:
+                raise AIError(f"compilation du shim echouee : {result.stderr.strip()[:300]}")
+            os.replace(tmp_path, bin_path)
+        finally:
+            tmp_path.unlink(missing_ok=True)
         for old in SHIM_DIR.glob("afmshim-*"):
-            if old != bin_path:
+            if old != bin_path and ".tmp" not in old.name:
                 old.unlink(missing_ok=True)
         return bin_path
 
@@ -99,25 +111,30 @@ class AIEngine:
     # ------------------------------------------------------------------- boot
 
     def warm_up(self) -> None:
-        """Determine le backend disponible. Appele en arriere-plan au boot."""
-        try:
-            self._shim_bin = self._ensure_shim()
-            self._call_shim({"task": "probe"}, timeout=60)
-            self.backend = "afm"
-            print("Moteur IA : Apple Intelligence (on-device)")
-            return
-        except (AIError, subprocess.TimeoutExpired, OSError) as exc:
-            self._unavailable_reason = str(exc)
-        try:
-            import mlx_lm  # noqa: F401  present seulement avec --extra fallback
+        """Determine le backend disponible. Appele en arriere-plan au boot.
+        Serialise et idempotent : le boot et une premiere action IA concurrents
+        declenchaient deux compilations swiftc vers le meme binaire."""
+        with self._warmup_lock:
+            if self.backend is not None:
+                return
+            try:
+                self._shim_bin = self._ensure_shim()
+                self._call_shim({"task": "probe"}, timeout=60)
+                self.backend = "afm"
+                print("Moteur IA : Apple Intelligence (on-device)")
+                return
+            except (AIError, subprocess.TimeoutExpired, OSError) as exc:
+                self._unavailable_reason = str(exc)
+            try:
+                import mlx_lm  # noqa: F401  present seulement avec --extra fallback
 
-            self.backend = "mlx"
-            print(f"Moteur IA : repli mlx-lm ({FALLBACK_MODEL}) — "
-                  f"Apple Intelligence indisponible ({self._unavailable_reason})")
-        except ImportError:
-            self.backend = "off"
-            print(f"Moteur IA indisponible : {self._unavailable_reason}. "
-                  "Repli possible : uv sync --extra fallback (mlx-lm).")
+                self.backend = "mlx"
+                print(f"Moteur IA : repli mlx-lm ({FALLBACK_MODEL}) — "
+                      f"Apple Intelligence indisponible ({self._unavailable_reason})")
+            except ImportError:
+                self.backend = "off"
+                print(f"Moteur IA indisponible : {self._unavailable_reason}. "
+                      "Repli possible : uv sync --extra fallback (mlx-lm).")
 
     # -------------------------------------------------------------- transform
 
@@ -147,7 +164,9 @@ class AIEngine:
     def _mlx_transform(self, payload: dict) -> str:
         from mlx_lm import generate, load
 
-        model, tokenizer = load(FALLBACK_MODEL)
+        if self._mlx is None:
+            self._mlx = load(FALLBACK_MODEL)
+        model, tokenizer = self._mlx
         instruction = FALLBACK_PROMPTS[payload["task"]].format(
             lang_name=LANG_NAMES.get(payload["lang"], payload["lang"]))
         parts = []

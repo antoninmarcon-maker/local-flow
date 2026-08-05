@@ -53,11 +53,13 @@ class Settings:
     def load(cls) -> "Settings":
         try:
             data = json.loads(SETTINGS_PATH.read_text(encoding="utf-8"))
-        except (FileNotFoundError, json.JSONDecodeError):
+            known = {f: data[f] for f in cls.__dataclass_fields__ if f in data}
+            settings = cls(**known)
+            settings.translate_langs = [c for c in settings.translate_langs
+                                        if c in TRANSLATE_LANGS]
+        except (FileNotFoundError, json.JSONDecodeError, TypeError, AttributeError):
+            # fichier absent, corrompu, ou types invalides : retour aux defauts
             return cls()
-        known = {f: data[f] for f in cls.__dataclass_fields__ if f in data}
-        settings = cls(**known)
-        settings.translate_langs = [c for c in settings.translate_langs if c in TRANSLATE_LANGS]
         return settings
 
     def save(self) -> None:

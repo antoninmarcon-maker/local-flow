@@ -10,12 +10,15 @@ from ApplicationServices import (
     AXUIElementCopyAttributeValue,
     AXUIElementCreateApplication,
     AXUIElementSetAttributeValue,
+    AXUIElementSetMessagingTimeout,
     kAXChildrenAttribute,
     kAXFocusedWindowAttribute,
     kAXRoleAttribute,
     kAXTitleAttribute,
     kAXValueAttribute,
 )
+
+AX_TIMEOUT_S = 1.0  # sans lui, une app cible gelee bloque chaque appel ~6 s
 
 # Apps de messagerie perso -> amical ; clients mail / outils pro -> pro.
 FRIENDLY_APPS = {"whatsapp", "instagram", "messages", "telegram", "signal",
@@ -41,6 +44,7 @@ def _attr(el, name):
 
 def window_title(pid: int) -> str:
     ax_app = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(ax_app, AX_TIMEOUT_S)
     window = _attr(ax_app, kAXFocusedWindowAttribute)
     if window is None:
         return ""
@@ -72,6 +76,7 @@ def read_conversation(pid: int, max_chars: int = MAX_CONTEXT_CHARS) -> str:
     (Messages, Mail) exposent directement. Echec ou arbre vide -> chaine vide,
     l'appelant fait sans contexte."""
     ax_app = AXUIElementCreateApplication(pid)
+    AXUIElementSetMessagingTimeout(ax_app, AX_TIMEOUT_S)
     AXUIElementSetAttributeValue(ax_app, "AXEnhancedUserInterface", True)
     window = _attr(ax_app, kAXFocusedWindowAttribute)
     if window is None:

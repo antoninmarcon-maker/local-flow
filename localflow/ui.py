@@ -225,8 +225,9 @@ class UI:
     def show_working(self, message: str) -> None:
         AppHelper.callAfter(self._do_show, message, self._full_text, [])
 
-    def show_final(self, text: str, pasted: bool, note: str | None = None) -> None:
-        AppHelper.callAfter(self._do_final, text, pasted, note)
+    def show_final(self, text: str, pasted: bool, note: str | None = None,
+                   register: str | None = None) -> None:
+        AppHelper.callAfter(self._do_final, text, pasted, note, register)
 
     def show_message(self, message: str, autohide: float = 5.0) -> None:
         AppHelper.callAfter(self._do_show, message, "", [], autohide)
@@ -301,22 +302,32 @@ class UI:
         self._full_text = text
         self._text_label.setStringValue_(text)
 
-    def _do_final(self, text: str, pasted: bool, note: str | None) -> None:
+    def _do_final(self, text: str, pasted: bool, note: str | None,
+                  register: str | None = None) -> None:
         specs: list[tuple[str, str]] = []
         if not pasted:
             specs.append(("Coller", "paste"))
         specs.append(("Corriger", "correct"))
+        # ton recommande selon l'app active : mis en avant juste apres Corriger
+        tones = [("Pro", "pro"), ("Amical", "friendly")]
+        if register == "pro":
+            specs.append(("● Pro", "pro"))
+            tones = [("Amical", "friendly")]
+        elif register == "friendly":
+            specs.append(("● Amical", "friendly"))
+            tones = [("Pro", "pro")]
         for code in self.settings.translate_langs:
             specs.append((f"→ {code.upper()}", f"translate:{code}"))
-        specs.append(("Pro", "pro"))
-        specs.append(("Amical", "friendly"))
+        specs.extend(tones)
         if note:
             status = note
         elif pasted:
             status = "Colle ✓ — transformer :"
         else:
             status = "Preview — coller ou transformer :"
-        self._do_show(status, text, specs, autohide=10.0 if pasted else 30.0)
+        # pasted=False : pas d'autohide, la dictee non collee ne doit pas
+        # disparaitre sous l'utilisateur (elle est aussi dans le presse-papiers)
+        self._do_show(status, text, specs, autohide=10.0 if pasted else None)
 
     def _do_hide(self) -> None:
         self._cancel_timer()

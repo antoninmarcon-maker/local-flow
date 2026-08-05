@@ -48,6 +48,7 @@ def run_process(transcript: str, audio: np.ndarray, focus_change: bool,
     doubles.install()
     try:
         app = App(Config(model="turbo", key_name="f8", language="fr"))
+        app.settings.auto_register = False  # pas d'appels Accessibilite reels ici
         app._process(audio, target=(1, "Notes"))
     finally:
         restore()
@@ -118,7 +119,8 @@ class FakeUI:
     def show_message(self, message: str, autohide: float = 5.0) -> None: self.events.append("message")
     def hide_panel(self) -> None: self.events.append("hide")
     def set_status(self, message: str) -> None: self.events.append("status")
-    def show_final(self, text: str, pasted: bool, note: str | None = None) -> None:
+    def show_final(self, text: str, pasted: bool, note: str | None = None,
+                   register: str | None = None) -> None:
         self.finals.append((text, pasted))
 
 
@@ -158,6 +160,7 @@ def test_action_corrige_et_remplace() -> None:
     logs = make_action_doubles("Bonjour le monde.", lambda: (1, "Notes"))
     try:
         app = App(Config(model="turbo", key_name="f8", language="fr"))
+        app.settings.auto_register = False
         app.ai = FakeAI("Bonjour le monde !")
         app._process(parole(), target=(1, "Notes"))
         assert logs["pasted"] == ["Bonjour le monde."], logs
@@ -176,6 +179,7 @@ def test_action_app_changee_presse_papiers() -> None:
     logs = make_action_doubles("Bonjour.", lambda: next(fronts))
     try:
         app = App(Config(model="turbo", key_name="f8", language="fr"))
+        app.settings.auto_register = False
         app.ai = FakeAI("Hello.")
         app._process(parole(), target=(1, "Notes"))
         assert logs["pasted"] == ["Bonjour."], logs
@@ -193,6 +197,7 @@ def test_apercu_avant_collage() -> None:
     logs = make_action_doubles("Bonjour le monde.", lambda: (1, "Notes"))
     try:
         app = App(Config(model="turbo", key_name="f8", language="fr"))
+        app.settings.auto_register = False
         app.ui = FakeUI()
         app.settings.preview_before_paste = True
         app._process(parole(), target=(1, "Notes"))

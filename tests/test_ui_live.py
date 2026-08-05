@@ -71,6 +71,10 @@ class Script(NSObject):
             self.ui._delegate.menuToggle_(toggle)
             assert self.ui.settings.live_preview == (not before), "toggle sans effet"
             self.ui._delegate.menuToggle_(toggle)  # restaure
+            # registre auto : le ton recommande est mis en avant apres Corriger
+            self.ui._do_final("x", True, None, "friendly")
+            titles = [str(b.title()) for b in self.ui._buttons]
+            assert titles == ["Corriger", "● Amical", "→ EN", "→ ES", "Pro"], titles
             self.ui.hide_panel()
         except Exception as exc:  # noqa: BLE001
             RESULTS["errors"].append(repr(exc))
