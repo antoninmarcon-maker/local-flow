@@ -28,6 +28,10 @@ from AppKit import (
     NSStatusBar,
     NSTextField,
     NSVariableStatusItemLength,
+    NSVisualEffectBlendingModeBehindWindow,
+    NSVisualEffectMaterialPopover,
+    NSVisualEffectStateActive,
+    NSVisualEffectView,
     NSWindowCollectionBehaviorCanJoinAllSpaces,
     NSWindowCollectionBehaviorFullScreenAuxiliary,
     NSWindowStyleMaskBorderless,
@@ -180,13 +184,18 @@ class UI:
         panel.setHidesOnDeactivate_(False)
         panel.setOpaque_(False)
         panel.setBackgroundColor_(NSColor.clearColor())
+        # fond : effet natif translucide arrondi (pas de CGColor : PyObjC n'en
+        # type pas le pointeur et l'affectation echoue silencieusement)
+        effect = NSVisualEffectView.alloc().initWithFrame_(
+            NSMakeRect(0, 0, PANEL_W, PANEL_H))
+        effect.setMaterial_(NSVisualEffectMaterialPopover)
+        effect.setBlendingMode_(NSVisualEffectBlendingModeBehindWindow)
+        effect.setState_(NSVisualEffectStateActive)
+        effect.setWantsLayer_(True)
+        effect.layer().setCornerRadius_(14.0)
+        effect.layer().setMasksToBounds_(True)
+        panel.setContentView_(effect)
         content = panel.contentView()
-        content.setWantsLayer_(True)
-        layer = content.layer()
-        layer.setCornerRadius_(14.0)
-        layer.setMasksToBounds_(True)
-        layer.setBackgroundColor_(
-            NSColor.windowBackgroundColor().colorWithAlphaComponent_(0.97).CGColor())
         self._status_label = _label(
             NSMakeRect(20, PANEL_H - 32, PANEL_W - 40, 18), 11,
             color=NSColor.secondaryLabelColor())
