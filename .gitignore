@@ -4,3 +4,8 @@ __pycache__/
 dist/
 *.egg-info/
 .DS_Store
+
+# secrets locaux (ajouté 06/08/2026 — audit de sécurité)
+.env
+.env.local
+.env.*.local
