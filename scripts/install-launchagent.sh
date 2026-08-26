@@ -7,7 +7,9 @@ LABEL="com.antonin.localflow"
 PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 PROJECT="$(cd "$(dirname "$0")/.." && pwd)"
 BIN="$PROJECT/.venv/bin/localflow"
-LOG="$HOME/Library/Logs/localflow.log"
+LOG_DIR="$HOME/Library/Logs/LocalFlow"
+LOG="$LOG_DIR/localflow.log"
+LEGACY_LOG="$HOME/Library/Logs/localflow.log"
 
 if [[ "$1" == "--uninstall" ]]; then
   launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
@@ -22,6 +24,12 @@ if [[ ! -x "$BIN" ]]; then
 fi
 
 mkdir -p "$HOME/Library/LaunchAgents"
+mkdir -p "$LOG_DIR"
+chmod 700 "$LOG_DIR"
+# Les anciennes versions écrivaient potentiellement le texte dicté en clair.
+# Ces journaux sensibles ne doivent pas survivre à la migration.
+rm -f -- "$LEGACY_LOG" "$LEGACY_LOG.1" "$LEGACY_LOG.2" \
+  "$LOG_DIR/localflow-legacy.log"
 cat > "$PLIST" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -35,9 +43,10 @@ cat > "$PLIST" <<EOF
   <key>ThrottleInterval</key><integer>10</integer>
   <key>ProcessType</key><string>Interactive</string>
   <key>EnvironmentVariables</key>
-  <dict><key>PYTHONUNBUFFERED</key><string>1</string></dict>
-  <key>StandardOutPath</key><string>$LOG</string>
-  <key>StandardErrorPath</key><string>$LOG</string>
+  <dict>
+    <key>PYTHONUNBUFFERED</key><string>1</string>
+    <key>LOCALFLOW_LOG_FILE</key><string>$LOG</string>
+  </dict>
 </dict>
 </plist>
 EOF

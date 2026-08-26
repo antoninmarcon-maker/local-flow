@@ -50,7 +50,7 @@ def input_volume() -> int | None:
     try:
         out = subprocess.run(
             ["osascript", "-e", "input volume of (get volume settings)"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, timeout=5, check=False,
         ).stdout.strip()
         return int(out)
     except (ValueError, OSError, subprocess.TimeoutExpired):

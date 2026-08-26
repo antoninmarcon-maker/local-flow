@@ -15,11 +15,18 @@ import re
 import time
 from collections import Counter
 
-from localflow.config import HISTORY_PATH, SUGGESTIONS_PATH, Settings
+from localflow.config import (
+    HISTORY_PATH,
+    SUGGESTIONS_PATH,
+    Settings,
+    ensure_private_directory,
+    secure_write_text,
+)
 from localflow.stt import load_dictionary
 
 PROFILE_MIN_ENTRIES = 5     # en dessous, pas assez de signal pour un profil
 PROFILE_WINDOW = 200        # dictees considerees (les plus recentes)
+HISTORY_MAX_ENTRIES = 200   # retention disque : aucune conservation indefinie
 RECOMPUTE_EVERY = 10        # recalcul du profil toutes les N dictees
 
 _TU = re.compile(r"\b(?:tu|te|toi|ton|ta|tes)\b|\bt'", re.IGNORECASE)
@@ -34,15 +41,36 @@ class Habits:
         self.settings = settings
         self._profile: str | None = None
         self._since_recompute = 0
+        self._migrate_existing_storage()
+
+    def _migrate_existing_storage(self) -> None:
+        """Sécurise et borne les données créées par les anciennes versions,
+        même quand leur collecte est désormais désactivée."""
+        for path in (HISTORY_PATH, SUGGESTIONS_PATH):
+            if path.exists():
+                ensure_private_directory(path.parent)
+                path.chmod(0o600)
+        try:
+            lines = HISTORY_PATH.read_text(encoding="utf-8").splitlines()
+        except (FileNotFoundError, OSError, UnicodeError):
+            return
+        if len(lines) > HISTORY_MAX_ENTRIES:
+            secure_write_text(
+                HISTORY_PATH,
+                "\n".join(lines[-HISTORY_MAX_ENTRIES:]) + "\n",
+            )
 
     def record(self, text: str, app_name: str, language: str | None) -> None:
         if not self.settings.habits_enabled:
             return
-        HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
         entry = {"ts": time.strftime("%Y-%m-%dT%H:%M:%S"), "app": app_name,
                  "lang": language, "text": text}
-        with HISTORY_PATH.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        try:
+            lines = HISTORY_PATH.read_text(encoding="utf-8").splitlines()
+        except FileNotFoundError:
+            lines = []
+        lines.append(json.dumps(entry, ensure_ascii=False))
+        secure_write_text(HISTORY_PATH, "\n".join(lines[-HISTORY_MAX_ENTRIES:]) + "\n")
         self._since_recompute += 1
         if self._since_recompute >= RECOMPUTE_EVERY:
             self._profile = None  # sera recalcule au prochain profile_summary()
@@ -119,10 +147,9 @@ class Habits:
                     if n >= 3 and w.lower() not in known]
         if not frequent:
             return
-        SUGGESTIONS_PATH.parent.mkdir(parents=True, exist_ok=True)
-        SUGGESTIONS_PATH.write_text(
+        secure_write_text(
+            SUGGESTIONS_PATH,
             "# Noms propres recurrents dans vos dictees, absents du dictionnaire\n"
             "# personnel. Copier les lignes utiles dans dictionary.txt.\n"
             + "\n".join(frequent) + "\n",
-            encoding="utf-8",
         )

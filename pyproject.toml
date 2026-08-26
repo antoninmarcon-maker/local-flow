@@ -14,6 +14,12 @@ dependencies = [
 # Repli du moteur IA si Apple Intelligence est indisponible : uv sync --extra fallback
 fallback = ["mlx-lm>=0.24"]
 
+[dependency-groups]
+dev = [
+    "pip-audit==2.10.1",
+    "ruff==0.16.4",
+]
+
 [project.scripts]
 localflow = "localflow.app:main"
 
@@ -23,3 +29,10 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["localflow"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/docs",
+    "/tasks",
+    "/tests",
+]

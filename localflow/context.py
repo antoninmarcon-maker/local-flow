@@ -5,7 +5,6 @@ Tout reste on-device : le texte lu ne sert qu'a donner le ton au moteur IA
 local, il n'est ni stocke ni envoye nulle part.
 """
 
-from AppKit import NSWorkspace
 from ApplicationServices import (
     AXUIElementCopyAttributeValue,
     AXUIElementCreateApplication,

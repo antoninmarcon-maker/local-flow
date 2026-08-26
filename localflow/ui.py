@@ -59,7 +59,7 @@ class _UIDelegate(NSObject):
     """Cible objc des menus, boutons et timers. Route vers l'objet UI python."""
 
     def initWithUI_(self, ui):
-        self = objc.super(_UIDelegate, self).init()
+        self = objc.super(_UIDelegate, self).init()  # noqa: PLW0642 - convention PyObjC
         if self is None:
             return None
         self.ui = ui

@@ -36,7 +36,7 @@ class Script(NSObject):
     """Deroule le scenario par etapes sur le thread principal."""
 
     def initWithUI_(self, ui):
-        self = objc.super(Script, self).init()
+        self = objc.super(Script, self).init()  # noqa: PLW0642 - convention PyObjC
         self.ui = ui
         return self
 

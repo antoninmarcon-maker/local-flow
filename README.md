@@ -34,10 +34,10 @@ detection passe par le petit modele d'apercu (~0,2 s), pas par le gros modele.
   colle avant le clic sur Coller (ou une action).
 - **Ton adapte a l'app active** : WhatsApp/Instagram/Messages → amical,
   Mail/Outlook/LinkedIn → pro (les navigateurs sont reconnus par le titre de fenetre).
-- **Lire la conversation pour le ton** : les messages visibles de la fenetre active
+- **Lire la conversation pour le ton** *(opt-in)* : les messages visibles de la fenetre active
   (via l'Accessibilite macOS) donnent le contexte au moteur IA — uniquement
   on-device, jamais stockes.
-- **Apprendre mes habitudes d'ecriture** : journal local des dictees
+- **Apprendre mes habitudes d'ecriture** *(opt-in)* : journal local des 200 dernieres dictees
   (`~/.config/localflow/history.jsonl`) dont est derive un profil de style
   (tutoiement, emojis, longueur...) injecte dans les reformulations, et des
   suggestions de dictionnaire (noms propres recurrents).
@@ -113,7 +113,8 @@ macOS demande a LocalFlow.app le droit de controler le Terminal (Automation) : a
 ```
 
 Installe un LaunchAgent launchd : local-flow tourne en arriere-plan des le login.
-Logs dans `~/Library/Logs/localflow.log`. Lance hors Terminal, le process a besoin
+Logs techniques sans contenu dicte dans `~/Library/Logs/LocalFlow/localflow.log` (rotation
+automatique : 1 MB, deux archives). Lance hors Terminal, le process a besoin
 de ses propres permissions (Surveillance de l'entree + Accessibilite pour le binaire
 Python affiche par le script), puis :
 
@@ -149,14 +150,18 @@ uv run python tests/test_stt.py          # gardes anti-hallucination + VAD Siler
 uv run python tests/test_context.py      # registre pro/amical par app
 uv run python tests/test_settings.py     # reglages persistants
 uv run python tests/test_habits.py       # habitudes d'ecriture
+uv run python tests/test_logging.py      # logs prives et rotation
+uv run python tests/test_security.py     # migration des permissions locales
+uv run python tests/test_packaging.py    # contenu wheel/sdist
 uv run python tests/test_ai.py           # moteur IA (saute si indisponible)
 uv run python tests/test_ui_live.py      # vraie UI AppKit pilotee par programme (~2 s a l'ecran)
 uv run python tests/test_pipeline.py     # parole synthetique FR/EN/ES + mp3 -> transcription (ffmpeg requis)
+uv run ruff check localflow tests        # qualite statique
 ```
 
 ## Depannage : "le texte ne se colle pas"
 
-Le terminal (ou `~/Library/Logs/localflow.log`) dit toujours pourquoi :
+Le terminal (ou `~/Library/Logs/LocalFlow/localflow.log`) dit toujours pourquoi :
 
 | Message | Cause | Remede |
 |---|---|---|
@@ -164,7 +169,7 @@ Le terminal (ou `~/Library/Logs/localflow.log`) dit toujours pourquoi :
 | `micro muet (crete RMS ...)` | le micro ne capte rien du tout | verifier l'entree selectionnee et son volume (Reglages Systeme > Son > Entree) |
 | `pas de parole detectee (VAD ...)` | du son mais pas de voix humaine | parler plus pres du micro ; la detection (VAD Silero) est independante du volume d'entree |
 | `texte juge hallucine sur du non-parole` | Whisper a invente une phrase sur du bruit | rien a faire, c'est le filet de securite qui fonctionne |
-| `transcrit en Xs : ...` sans collage | Accessibilite manquante pour le terminal | l'ajouter dans Confidentialite et securite > Accessibilite, relancer |
+| `transcription terminee en Xs` sans collage | Accessibilite manquante pour le terminal | l'ajouter dans Confidentialite et securite > Accessibilite, relancer |
 | `app active changee pendant la transcription` | le focus a bouge avant la fin | bouton Coller dans le panneau, ou Cmd+V |
 | transcription tres lente (10-20 s) | pression memoire (8 GB, navigateur charge...) | fermer des apps ou `--model small` |
 

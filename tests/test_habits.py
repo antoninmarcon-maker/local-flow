@@ -4,6 +4,7 @@ Tout passe par un dossier temporaire (aucune ecriture dans ~/.config).
 Usage : uv run python tests/test_habits.py
 """
 
+import stat
 import tempfile
 from pathlib import Path
 
@@ -61,9 +62,43 @@ def test_desactive_n_ecrit_rien() -> None:
         assert h.profile_summary() == ""
 
 
+def test_historique_prive_et_borne() -> None:
+    """Une longue utilisation ne doit ni exposer ni conserver indéfiniment
+    les dictées : seules les 200 plus récentes restent sur disque."""
+    with tempfile.TemporaryDirectory() as tmp:
+        h = make_habits(Path(tmp) / "localflow")
+        for index in range(205):
+            h.record(f"Message prive numero {index}", "Notes", "fr")
+        lines = habits_mod.HISTORY_PATH.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 200, len(lines)
+        assert "numero 5" in lines[0], lines[0]
+        assert "numero 204" in lines[-1], lines[-1]
+        assert stat.S_IMODE(habits_mod.HISTORY_PATH.parent.stat().st_mode) == 0o700
+        assert stat.S_IMODE(habits_mod.HISTORY_PATH.stat().st_mode) == 0o600
+
+
+def test_historique_ancien_est_securise_meme_desactive() -> None:
+    """La mise à jour doit corriger les données héritées sans attendre que la
+    collecte soit réactivée."""
+    with tempfile.TemporaryDirectory() as tmp:
+        root = Path(tmp) / "localflow"
+        root.mkdir(mode=0o755)
+        history = root / "history.jsonl"
+        history.write_text("".join(f'{{"text":"{i}"}}\n' for i in range(205)),
+                           encoding="utf-8")
+        history.chmod(0o644)
+        habits_mod.HISTORY_PATH = history
+        Habits(Settings(habits_enabled=False))
+        assert len(history.read_text(encoding="utf-8").splitlines()) == 200
+        assert stat.S_IMODE(root.stat().st_mode) == 0o700
+        assert stat.S_IMODE(history.stat().st_mode) == 0o600
+
+
 if __name__ == "__main__":
     test_profil_vide_sans_donnees()
     test_profil_tutoiement_court()
     test_suggestions_noms_propres()
     test_desactive_n_ecrit_rien()
+    test_historique_prive_et_borne()
+    test_historique_ancien_est_securise_meme_desactive()
     print("OK : habitudes (profil vide, tutoiement/court, suggestions, opt-out)")
