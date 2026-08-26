@@ -39,6 +39,7 @@ def test_vad_signaux_reels() -> None:
     par dynamique de trames laissait passer une fois normalises."""
     import subprocess
     import tempfile
+    import wave
     from pathlib import Path
 
     import numpy as np
@@ -58,12 +59,27 @@ def test_vad_signaux_reels() -> None:
     assert not has_speech(norm(tone)), "sinus en rafales pris pour de la parole"
 
     with tempfile.TemporaryDirectory() as tmp:
-        p = Path(tmp) / "fr.aiff"
-        subprocess.run(["say", "-o", str(p), "-v", "Thomas",
-                        "Bonjour, on se retrouve demain."], check=True)
-        import mlx_whisper.audio as ma
-
-        speech = ma.load_audio(str(p))
+        p = Path(tmp) / "fr.wav"
+        subprocess.run(
+            [
+                "say",
+                "-o",
+                str(p),
+                "--file-format=WAVE",
+                "--data-format=LEI16@16000",
+                "-v",
+                "Thomas",
+                "Bonjour, on se retrouve demain.",
+            ],
+            check=True,
+        )
+        with wave.open(str(p), "rb") as stream:
+            assert stream.getframerate() == SAMPLE_RATE
+            assert stream.getsampwidth() == 2
+            speech = np.frombuffer(stream.readframes(stream.getnframes()), dtype="<i2")
+            speech = speech.astype(np.float32) / 32768.0
+            if stream.getnchannels() > 1:
+                speech = speech.reshape(-1, stream.getnchannels()).mean(axis=1)
         assert has_speech(speech), "parole synthetique non detectee"
         assert has_speech(norm(speech * 0.001)), "parole faible normalisee non detectee"
 
