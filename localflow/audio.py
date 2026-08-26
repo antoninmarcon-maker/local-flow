@@ -1,9 +1,12 @@
 """Capture micro et analyse du signal."""
 
+import logging
 import threading
 
 import numpy as np
 import sounddevice as sd
+
+logger = logging.getLogger("localflow")
 
 SAMPLE_RATE = 16_000
 MIN_DURATION_S = 0.3
@@ -61,12 +64,12 @@ class Recorder:
                 self._stream = self._open()
             try:
                 self._stream.start()
-            except Exception:
+            except Exception:  # noqa: BLE001 - backend CoreAudio tiers
                 # stream invalide (peripherique debranche...) : on le recree une fois
                 try:
                     self._stream.close()
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001 - fermeture best-effort
+                    logger.debug("fermeture du stream ignoree (%s)", type(exc).__name__)
                 self._stream = self._open()
                 self._stream.start()
             self._armed = True
@@ -77,8 +80,8 @@ class Recorder:
             if self._stream is not None:
                 try:
                     self._stream.stop()  # draine les callbacks avant le concatenate
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001 - arret best-effort
+                    logger.debug("arret du stream ignore (%s)", type(exc).__name__)
             if not self._blocks:
                 return np.zeros(0, dtype=np.float32)
             return np.concatenate(self._blocks)[:, 0]
@@ -98,8 +101,8 @@ class Recorder:
                 try:
                     self._stream.stop()
                     self._stream.close()
-                except Exception:
-                    pass
+                except Exception as exc:  # noqa: BLE001 - fermeture best-effort
+                    logger.debug("fermeture du stream ignoree (%s)", type(exc).__name__)
                 self._stream = None
 
 

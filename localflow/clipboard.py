@@ -7,7 +7,9 @@ from pynput import keyboard
 
 
 def clipboard_get() -> str:
-    return subprocess.run(["pbpaste"], capture_output=True, text=True).stdout
+    return subprocess.run(
+        ["pbpaste"], capture_output=True, text=True, check=False
+    ).stdout
 
 
 def clipboard_set(text: str) -> None:

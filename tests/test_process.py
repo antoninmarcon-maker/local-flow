@@ -4,6 +4,9 @@ Aucune permission macOS ni modele requis : transcribe/paste/clipboard/frontmost
 sont remplaces par des doublures. Usage : uv run python tests/test_process.py
 """
 
+import io
+import logging
+
 import numpy as np
 
 import localflow.app as app_mod
@@ -104,6 +107,23 @@ def test_focus_change_pas_de_collage_aveugle() -> None:
     doubles = run_process("Bonjour le monde.", parole(), focus_change=True)
     assert doubles.pasted == [], doubles.pasted
     assert doubles.clipboard == ["Bonjour le monde."], doubles.clipboard
+
+
+def test_transcription_absente_des_logs() -> None:
+    """Le texte dicté est une donnée privée : le journal peut confirmer le
+    traitement, jamais recopier son contenu."""
+    stream = io.StringIO()
+    logger = logging.getLogger("localflow")
+    handler = logging.StreamHandler(stream)
+    logger.addHandler(handler)
+    logger.setLevel(logging.INFO)
+    try:
+        run_process("Secret medical tres sensible.", parole(), focus_change=False)
+    finally:
+        logger.removeHandler(handler)
+    output = stream.getvalue()
+    assert "transcription terminee" in output.lower(), output
+    assert "Secret medical tres sensible" not in output, output
 
 
 class FakeUI:
@@ -217,6 +237,7 @@ if __name__ == "__main__":
     test_texte_vide_ignore()
     test_collage_focus_stable()
     test_focus_change_pas_de_collage_aveugle()
+    test_transcription_absente_des_logs()
     test_action_corrige_et_remplace()
     test_action_app_changee_presse_papiers()
     test_apercu_avant_collage()

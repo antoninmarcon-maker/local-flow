@@ -25,7 +25,9 @@ def say(text: str, path: Path, voice: str | None = None) -> None:
 
 
 def voice_available(name: str) -> bool:
-    out = subprocess.run(["say", "-v", "?"], capture_output=True, text=True).stdout
+    out = subprocess.run(
+        ["say", "-v", "?"], capture_output=True, text=True, check=False
+    ).stdout
     return any(line.split()[0] == name for line in out.splitlines() if line.strip())
 
 

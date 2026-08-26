@@ -8,6 +8,8 @@ Apple Intelligence (on-device). Aucune donnee ne quitte la machine.
 """
 
 import argparse
+import logging
+import os
 import queue
 import threading
 import time
@@ -28,9 +30,17 @@ from localflow.audio import (
 from localflow.clipboard import clipboard_set, paste, press_undo
 from localflow.config import DICTIONARY_PATH, TRANSLATE_LANGS, Config, Settings
 from localflow.context import detect_register, read_conversation, window_title
-from localflow.hotkey import FN_KEYCODE, KEYS, FnListener
+from localflow.hotkey import FN_KEYCODE as _FN_KEYCODE
+from localflow.hotkey import KEYS, FnListener
+from localflow.logging_utils import configure_logging
 from localflow.macos import frontmost_app, input_volume, play_sound, preload_sounds, ts
-from localflow.stt import PREVIEW_MODEL, detect_language, load_dictionary, preload, transcribe
+from localflow.stt import (
+    PREVIEW_MODEL,
+    detect_language,
+    load_dictionary,
+    preload,
+    transcribe,
+)
 from localflow.textproc import clean
 from localflow.vad import MIN_SPEECH_FRAMES, MIN_SPEECH_RATIO, speech_stats
 
@@ -40,6 +50,12 @@ ACTION_LABELS = {
     "pro": "Reformulation pro",
     "friendly": "Reformulation amicale",
 }
+
+logger = logging.getLogger("localflow")
+
+# Compatibilité avec les intégrations qui importaient historiquement cette
+# constante depuis localflow.app plutôt que depuis localflow.hotkey.
+FN_KEYCODE = _FN_KEYCODE
 
 # Apps ou Cmd+Z n'annule pas un collage : remplacer y dupliquerait le texte.
 UNDO_UNSAFE_APPS = {"Terminal", "iTerm2", "Alacritty", "kitty", "Warp", "Ghostty"}
@@ -101,8 +117,8 @@ class App:
                     self._process(*payload)
                 elif kind == "action":
                     self._run_action(*payload)
-            except Exception as exc:
-                print(f"[erreur] {kind} : {exc}")
+            except Exception as exc:  # noqa: BLE001 - frontiere du worker
+                logger.error("%s impossible (%s)", kind, type(exc).__name__)
                 if self.ui:
                     self.ui.show_message(f"Erreur : {exc}", autohide=6.0)
             finally:
@@ -119,10 +135,10 @@ class App:
         play_sound("Tink")
         try:
             self.recorder.start()
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - backend audio tiers
             self.recording = False
             play_sound("Bottle")
-            print(f"[{ts()}] micro indisponible : {exc}")
+            logger.error("[%s] micro indisponible (%s)", ts(), type(exc).__name__)
             if self.ui:
                 self.ui.show_message("Micro indisponible — verifier l'entree son", autohide=5.0)
             return
@@ -139,16 +155,15 @@ class App:
         audio = self.recorder.stop()
         play_sound("Pop")
         if self.recorder.overflowed:
-            print(f"[{ts()}] attention : blocs audio perdus pendant la capture "
-                  "(machine tres chargee), la transcription peut etre trouee")
+            logger.warning("[%s] blocs audio perdus pendant la capture", ts())
         duration = len(audio) / SAMPLE_RATE
         if duration < MIN_DURATION_S:
-            print(f"[{ts()}] enregistrement trop court ({duration:.1f}s), ignore")
+            logger.info("[%s] enregistrement trop court (%.1fs), ignore", ts(), duration)
             if self.ui:
                 self.ui.hide_panel()
             return
         target = frontmost_app()
-        print(f"[{ts()}] {duration:.1f}s de parole, transcription en cours...")
+        logger.info("[%s] %.1fs de parole, transcription en cours", ts(), duration)
         if self.ui:
             self.ui.show_working("Transcription…")
         self._ensure_worker()
@@ -162,7 +177,7 @@ class App:
         self.recording = False
         self.recorder.stop()
         play_sound("Bottle")
-        print(f"[{ts()}] dictee annulee (autre touche pendant l'enregistrement)")
+        logger.info("[%s] dictee annulee", ts())
         if self.ui:
             self.ui.hide_panel()
 
@@ -193,7 +208,7 @@ class App:
                     try:
                         _ratio, frames = speech_stats(audio)
                         heard = frames >= MIN_SPEECH_FRAMES
-                    except Exception:
+                    except Exception:  # noqa: BLE001 - VAD optionnel
                         heard = True  # pas de VAD : on tente l'apercu quand meme
                     if heard:
                         if self.cfg.language is None and self._detected_lang is None:
@@ -204,7 +219,7 @@ class App:
                                           self.cfg.language or self._detected_lang)
                         if self.recording and gen == self._preview_gen and text and self.ui:
                             self.ui.show_preview(text)
-                except Exception:
+                except Exception:  # noqa: BLE001 - apercu strictement best-effort
                     return  # l'apercu ne doit jamais casser la dictee
             time.sleep(1.2)
 
@@ -220,8 +235,7 @@ class App:
                  detected_lang: str | None = None) -> None:
         floor, peak = speech_levels(audio)
         if peak < SILENCE_PEAK_RMS:
-            print(f"[{ts()}] micro muet (crete RMS {peak:.6f}), ignore. Verifier "
-                  "l'entree micro (Reglages Systeme > Son > Entree).")
+            logger.info("[%s] micro muet (crete RMS %.6f), ignore", ts(), peak)
             if self.ui:
                 self.ui.show_message("Micro muet — verifier l'entree son", autohide=5.0)
             return
@@ -232,15 +246,14 @@ class App:
         try:
             ratio, frames = speech_stats(audio)
             if frames < MIN_SPEECH_FRAMES or ratio < MIN_SPEECH_RATIO:
-                print(f"[{ts()}] pas de parole detectee (VAD : {ratio:.0%} de "
-                      f"trames parlees), ignore.")
+                logger.info("[%s] pas de parole detectee (VAD : %.0f%%), ignore",
+                            ts(), ratio * 100)
                 if self.ui:
                     self.ui.show_message("Pas de parole detectee", autohide=5.0)
                 return
-        except Exception:
+        except Exception:  # noqa: BLE001 - repli sans onnxruntime
             if peak < SPEECH_DYNAMICS_RATIO * floor:
-                print(f"[{ts()}] pas de parole detectee (signal plat : crete {peak:.4f} "
-                      f"< {SPEECH_DYNAMICS_RATIO} x plancher {floor:.4f}), ignore.")
+                logger.info("[%s] pas de parole detectee (signal plat), ignore", ts())
                 if self.ui:
                     self.ui.show_message("Pas de parole detectee", autohide=5.0)
                 return
@@ -252,28 +265,29 @@ class App:
         t0 = time.monotonic()
         try:
             text = clean(transcribe(audio, self.cfg.model, language))
-        except Exception as exc:
-            print(f"[erreur] transcription : {exc}")
+        except Exception as exc:  # noqa: BLE001 - backend STT tiers
+            logger.error("transcription impossible (%s)", type(exc).__name__)
             if self.ui:
                 self.ui.show_message(f"Erreur de transcription : {exc}", autohide=6.0)
             return
         elapsed = time.monotonic() - t0
         if not text:
-            print(f"[{ts()}] transcription vide, rien a coller")
+            logger.info("[%s] transcription vide, rien a coller", ts())
             if self.ui:
                 self.ui.hide_panel()
             return
-        print(f"[{ts()}] transcrit en {elapsed:.1f}s : {text}")
+        logger.info("[%s] transcription terminee en %.1fs (%d caracteres)",
+                    ts(), elapsed, len(text))
         if self.habits:
             try:
                 self.habits.record(text, target[1], language)
-            except Exception:
-                pass  # journal best-effort : ne doit jamais bloquer le collage
+            except Exception as exc:  # noqa: BLE001 - journal best-effort
+                logger.warning("journal des habitudes indisponible (%s)", type(exc).__name__)
         register = None
         if self.settings.auto_register:
             try:
                 register = detect_register(target[1], window_title(target[0]))
-            except Exception:
+            except Exception:  # noqa: BLE001 - API Accessibilite best-effort
                 register = None
         if self.settings.preview_before_paste and self.ui:
             clipboard_set(text)  # filet : le panneau s'efface, Cmd+V marche toujours
@@ -283,16 +297,15 @@ class App:
         current = frontmost_app()
         if current[0] != target[0]:
             clipboard_set(text)
-            print(f"[{ts()}] app active changee pendant la transcription "
-                  f"({target[1]} -> {current[1]}) : texte laisse dans le "
-                  "presse-papiers, coller avec Cmd+V.")
+            logger.info("[%s] app active changee pendant la transcription (%s -> %s)",
+                        ts(), target[1], current[1])
             self._last = {"text": text, "target": target, "pasted": False}
             if self.ui:
                 self.ui.show_final(text, pasted=False, register=register,
                                    note="App changee — texte copie, coller avec Cmd+V")
             return
         self._paste(text)
-        print(f"[{ts()}] colle dans {target[1]}")
+        logger.info("[%s] collage termine dans %s", ts(), target[1])
         self._last = {"text": text, "target": target, "pasted": True}
         if self.ui:
             self.ui.show_final(text, pasted=True, register=register)
@@ -329,7 +342,7 @@ class App:
         if task in ("pro", "friendly") and self.settings.read_context:
             try:
                 context = read_conversation(src["target"][0])
-            except Exception:
+            except Exception:  # noqa: BLE001 - API Accessibilite best-effort
                 context = ""  # meilleur effort : le ton marche aussi sans contexte
         profile = ""
         if self.habits and self.settings.habits_enabled:
@@ -338,12 +351,13 @@ class App:
         try:
             result = self.ai.transform(task, src["text"], lang=lang,
                                        context=context, profile=profile)
-        except Exception as exc:
-            print(f"[erreur] {label} : {exc}")
+        except Exception as exc:  # noqa: BLE001 - backends IA tiers
+            logger.error("%s impossible (%s)", label, type(exc).__name__)
             if self.ui:
                 self.ui.show_message(f"{label} impossible : {exc}", autohide=6.0)
             return
-        print(f"[{ts()}] {label} en {time.monotonic() - t0:.1f}s : {result}")
+        logger.info("[%s] %s terminee en %.1fs (%d caracteres)",
+                    ts(), label, time.monotonic() - t0, len(result))
         self._paste_result(result, src)
 
     def _paste_result(self, text: str, src: dict) -> None:
@@ -373,7 +387,7 @@ class App:
         else:
             self._expect_synthetic(1)
         paste(text, self.kb)
-        print(f"[{ts()}] colle dans {src['target'][1]}")
+        logger.info("[%s] collage termine dans %s", ts(), src["target"][1])
         self._last = {"text": text, "target": src["target"], "pasted": True}
         if self.ui:
             self.ui.show_final(text, pasted=True)
@@ -382,12 +396,10 @@ class App:
 
     def _startup_report(self) -> None:
         if load_dictionary():
-            print(f"Dictionnaire personnel charge : {DICTIONARY_PATH}")
+            logger.info("Dictionnaire personnel charge : %s", DICTIONARY_PATH)
         volume = input_volume()
         if volume is not None and volume < 40:
-            print(f"[attention] volume d'entree micro bas ({volume}/100) : le signal "
-                  "est normalise automatiquement, mais monter l'entree ameliore la "
-                  "precision (Reglages Systeme > Son > Entree).")
+            logger.warning("volume d'entree micro bas (%s/100)", volume)
 
     def _boot_models(self) -> None:
         """Prechargements longs, en arriere-plan pour ne pas bloquer l'UI.
@@ -401,16 +413,16 @@ class App:
             preload(self.cfg.model, self.cfg.language)
             if self.ui and self.settings.live_preview:
                 preload(PREVIEW_MODEL, self.cfg.language)
-        except Exception as exc:
-            print(f"[erreur] chargement des modeles : {exc}")
+        except Exception as exc:  # noqa: BLE001 - backends modele tiers
+            logger.error("chargement des modeles impossible (%s)", type(exc).__name__)
             if self.ui:
                 self.ui.set_status("Erreur : modele introuvable — verifier la connexion")
                 self.ui.show_message(f"Chargement du modele impossible : {exc}",
                                      autohide=10.0)
             return
         self._startup_report()
-        print(f"Pret. Maintenir [{self.cfg.key_name}] pour dicter, relacher pour "
-              "coller. Ctrl+C pour quitter.")
+        logger.info("Pret. Maintenir [%s] pour dicter, relacher pour coller",
+                    self.cfg.key_name)
         if self.ui:
             self.ui.set_status(f"Pret — maintenir {self.cfg.key_name} pour dicter")
             if self.ai is not None:
@@ -430,7 +442,7 @@ class App:
             self._run_terminal(fn_listener)
 
     def _run_terminal(self, fn_listener: FnListener | None) -> None:
-        print("Prechargement du modele (telechargement HuggingFace au premier lancement)...")
+        logger.info("Prechargement du modele")
         self._boot_models()
         if fn_listener is not None:
             fn_listener.run()
@@ -445,7 +457,7 @@ class App:
         ns_app = NSApplication.sharedApplication()
         ns_app.setActivationPolicy_(NSApplicationActivationPolicyAccessory)
         self.ui.setup()
-        print("Prechargement du modele (telechargement HuggingFace au premier lancement)...")
+        logger.info("Prechargement du modele")
         threading.Thread(target=self._boot_models, daemon=True).start()
         if fn_listener is not None:
             fn_listener.attach_to_current_runloop()
@@ -455,6 +467,7 @@ class App:
 
 
 def main() -> None:
+    configure_logging(os.environ.get("LOCALFLOW_LOG_FILE"))
     parser = argparse.ArgumentParser(
         prog="localflow",
         description="Dictee vocale 100 % locale : maintenir une touche, parler, relacher.",
@@ -483,7 +496,7 @@ def main() -> None:
     try:
         app.run()
     except KeyboardInterrupt:
-        print("\nArret.")
+        logger.info("Arret")
     except PermissionError as exc:
         raise SystemExit(f"Erreur : {exc}")
 

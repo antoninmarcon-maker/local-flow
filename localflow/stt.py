@@ -6,11 +6,14 @@ ne cachant qu'UN modele (alterner rechargerait turbo du disque a chaque dictee),
 un cache multi-modeles est installe a l'import.
 """
 
+import logging
 import threading
 
 import numpy as np
 
-from localflow.config import DICTIONARY_PATH
+from localflow.config import DICTIONARY_PATH, ensure_private_directory
+
+logger = logging.getLogger("localflow")
 
 MODELS = {
     "turbo": "mlx-community/whisper-large-v3-turbo",
@@ -73,6 +76,9 @@ def load_dictionary() -> str | None:
     """Dictionnaire personnel : un mot/nom propre par ligne, injecte en
     initial_prompt pour biaiser Whisper (equivalent local du dictionnaire Wispr)."""
     try:
+        if DICTIONARY_PATH.exists():
+            ensure_private_directory(DICTIONARY_PATH.parent)
+            DICTIONARY_PATH.chmod(0o600)
         lines = DICTIONARY_PATH.read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return None
@@ -108,8 +114,8 @@ def transcribe(audio: "np.ndarray | str", model: str, language: str | None) -> s
     text = str(result["text"]).strip()
     if text and looks_hallucinated(result):
         probs = [round(s.get("no_speech_prob", 0.0), 2) for s in result["segments"]]
-        print(f"[stt] texte juge hallucine sur du non-parole "
-              f"(no_speech_prob {probs}), ignore : {text!r}")
+        logger.info("texte juge hallucine sur du non-parole "
+                    "(no_speech_prob %s), ignore", probs)
         return ""
     return text
 
